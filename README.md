@@ -6,10 +6,24 @@ A Python package for reconstructing dynamic objects in CT imaging using Gaussian
 
 GMM-CT recovers the internal structure and motion of objects undergoing projectile motion and rotation from limited CT projection data. Each object in the scene is modelled as a Gaussian component with anisotropic covariance, and the package jointly estimates:
 
-- Attenuation coefficients and shape matrices
-- Initial velocities and trajectory parameters
-- Angular velocities (rotation) via FFT-based spectral estimation
+- Attenuation coefficients ($\alpha$) and shape matrices ($U$)
+- Initial velocities ($v_0$) and ballistic trajectory parameters
+- Angular velocities ($\omega$) for in-plane rotation
 - Multi-object assignment via the Hungarian algorithm
+
+### Reconstruction Pipeline
+
+The reconstruction proceeds in four stages:
+
+| Stage | What is optimised | Method | Loss |
+|---|---|---|---|
+| **1. Trajectory** | Initial velocities $v_0$ | Multi-start L-BFGS (up to 1 500 iters) | L2 on peak receiver heights, with Hungarian assignment |
+| **1.5. Velocity refinement** | $v_0$ (fine-tune) | L-BFGS root-finding on analytic derivative | Closed-form isotropic projection derivative |
+| **2. Joint morphology** | $\alpha$, $U_{\text{skew}}$, $\omega$ | Multi-start L-BFGS (up to 1 000 iters) | Smooth L1 (Huber, $\beta{=}0.3$) on full projections |
+| **3. Grid search** | $\omega$ | Brute-force grid ($\pm 3$ Hz, $0.1$ Hz steps) | Smooth L1 |
+| **4. Final polish** | $\alpha$, $U_{\text{skew}}$, $\omega$ | L-BFGS (200 iters) | Smooth L1 |
+
+**Physical model:** Each Gaussian follows a ballistic trajectory $\mu_k(t) = x_0 + v_0\,t + \tfrac{1}{2}\,a_0\,t^2$ with 2D rotation $R(2\pi\omega t)$. Projections are computed via a closed-form X-ray transform of the rotated Gaussian. Stage 1 decouples trajectory from rotation by using isotropic Gaussians; Stages 2–4 then recover the full anisotropic shape and rotation.
 
 ## Quick Start
 
@@ -71,7 +85,15 @@ proj_data = model.generate_projections(time_points, theta_true)
 results = model.fit(proj_data, time_points)
 ```
 
-See [examples/basic_reconstruction.py](examples/basic_reconstruction.py) for a complete working example.
+See [examples/basic_reconstruction.py](examples/basic_reconstruction.py) for a complete working example, or use the split workflow:
+
+```bash
+# Run reconstruction → saves results.pt
+python scripts/reconstruct.py --N 3 --seed 42
+
+# Analyse saved results → error tables, plots, animations
+python scripts/analyse.py data/results/<experiment_dir>/
+```
 
 ## Project Structure
 
@@ -81,10 +103,10 @@ gmm-ct/
 │   ├── __init__.py               # Public API re-exports
 │   ├── cli.py                    # CLI entry point
 │   ├── core/
-│   │   ├── models.py             # GMM_reco class
-│   │   └── optimizer.py          # NewtonRaphsonLBFGS
+│   │   ├── models.py             # GMM_reco class (reconstruction pipeline)
+│   │   └── optimizer.py          # L-BFGS root-finding (velocity refinement)
 │   ├── estimation/
-│   │   ├── omega.py              # FFT-based omega estimation
+│   │   ├── omega.py              # Omega estimation utilities
 │   │   └── peak_analysis.py      # Peak detection (PeakData)
 │   ├── utils/
 │   │   ├── generators.py         # Synthetic parameter generation
@@ -95,6 +117,9 @@ gmm-ct/
 │   │   └── publication.py        # Publication-quality figures
 │   └── config/
 │       └── defaults.py           # ReconstructionConfig dataclass
+├── scripts/
+│   ├── reconstruct.py            # Run experiment, save results
+│   └── analyse.py                # Load results, compute errors, plot
 ├── tests/
 │   ├── conftest.py               # Shared fixtures
 │   └── unit/                     # 29 unit tests
@@ -103,7 +128,7 @@ gmm-ct/
 │   ├── stability/                # Stability experiments
 │   └── deprecated/               # Superseded scripts (reference only)
 ├── examples/
-│   └── basic_reconstruction.py   # End-to-end example
+│   └── basic_reconstruction.py   # Self-contained end-to-end example
 ├── docs/
 │   ├── guides/quickstart.md
 │   └── research_notes/           # Algorithm design notes
@@ -115,10 +140,10 @@ gmm-ct/
 
 | Import path | Description |
 |---|---|
-| `gmm_ct.core.models.GMM_reco` | Main reconstruction class |
-| `gmm_ct.core.optimizer.NewtonRaphsonLBFGS` | Custom L-BFGS optimizer |
-| `gmm_ct.estimation.omega` | FFT-based angular velocity estimation |
-| `gmm_ct.estimation.peak_analysis.PeakData` | Peak detection and storage |
+| `gmm_ct.core.models.GMM_reco` | Main reconstruction class (4-stage pipeline) |
+| `gmm_ct.core.optimizer.NewtonRaphsonLBFGS` | L-BFGS root-finder for velocity refinement |
+| `gmm_ct.estimation.omega` | Omega estimation utilities |
+| `gmm_ct.estimation.peak_analysis.PeakData` | Peak detection data container |
 | `gmm_ct.utils.generators` | Synthetic data generation |
 | `gmm_ct.utils.geometry` | CT geometry (receiver construction) |
 | `gmm_ct.utils.helpers` | Random seeds, parameter export |
@@ -188,9 +213,9 @@ MIT
 
 ```bibtex
 @software{gmm_ct,
-  author  = {Burrows, Daniel; Yarman, Can Evren; Oktem, Ozan},
+  author  = {Burrows, Daniel and Yarman, Can Evren and Oktem, Ozan},
   title   = {GMM-CT: Gaussian Mixture Model CT Reconstruction},
   year    = {2026},
-  url     = {https://github.com/yourusername/gmm-ct}
+  url     = {https://github.com/dwb26/gmm-ct}
 }
 ```
