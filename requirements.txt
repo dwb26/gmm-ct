@@ -1,0 +1,14 @@
+# Core dependencies
+torch>=2.0.0
+numpy>=1.21.0
+matplotlib>=3.5.0
+scipy>=1.7.0
+dtaidistance>=2.3.0
+torchmin>=0.0.2
+
+# Development dependencies (uncomment if needed)
+# pytest>=7.0
+# pytest-cov>=4.0
+# black>=22.0
+# flake8>=5.0
+# ipython>=8.0

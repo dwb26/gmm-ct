@@ -1,0 +1,123 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gmm-ct"
+version = "0.1.0"
+authors = [
+    {name = "Daniel Burrows"}
+]
+description = "Gaussian Mixture Model CT Reconstruction with Motion Estimation"
+readme = "README.md"
+requires-python = ">=3.8"
+keywords = ["ct-reconstruction", "gaussian-mixture-model", "medical-imaging", "motion-estimation"]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "torch>=2.0.0",
+    "numpy>=1.21.0",
+    "matplotlib>=3.5.0",
+    "scipy>=1.7.0",
+    "dtaidistance>=2.3.0",
+    "pytorch-minimize>=0.0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=22.0",
+    "flake8>=5.0",
+    "mypy>=0.990",
+    "ipython>=8.0",
+]
+docs = [
+    "sphinx>=5.0",
+    "sphinx-rtd-theme>=1.0",
+    "sphinx-autodoc-typehints>=1.19",
+]
+api = [
+    "fastapi>=0.95.0",
+    "uvicorn>=0.21.0",
+    "pydantic>=1.10.0",
+]
+all = [
+    "gmm-ct[dev,docs,api]"
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/gmm-ct"
+Documentation = "https://gmm-ct.readthedocs.io"
+Repository = "https://github.com/yourusername/gmm-ct"
+"Bug Tracker" = "https://github.com/yourusername/gmm-ct/issues"
+
+[project.scripts]
+gmm-ct = "gmm_ct.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gmm_ct*"]
+exclude = ["tests*", "experiments*", "docs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--verbose",
+]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["gmm_ct"]
+omit = [
+    "*/tests/*",
+    "*/experiments/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
