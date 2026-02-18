@@ -61,9 +61,9 @@ receivers = construct_receivers(device, (128, 4.0, -3.0, 3.0))
 d, N = 2, 3
 theta_true = generate_true_param(
     d, N,
-    initial_location=[-8.0, 0.0],
-    initial_velocity=[3.0, 2.0],
-    initial_acceleration=[0.0, -GRAVITATIONAL_ACCELERATION],
+    initial_location=torch.tensor([-8.0, 0.0], dtype=torch.float64, device=device),
+    initial_velocity=torch.tensor([3.0, 2.0], dtype=torch.float64, device=device),
+    initial_acceleration=torch.tensor([0.0, -GRAVITATIONAL_ACCELERATION], dtype=torch.float64, device=device),
     min_rot=-24.0, max_rot=-20.0,
     device=device
 )
@@ -85,7 +85,40 @@ proj_data = model.generate_projections(time_points, theta_true)
 results = model.fit(proj_data, time_points)
 ```
 
-See [examples/basic_reconstruction.py](examples/basic_reconstruction.py) for a complete working example, or use the split workflow:
+See [examples/basic_reconstruction.py](examples/basic_reconstruction.py) for a complete working example.
+
+### YAML + Command Line
+
+For a cleaner separation of data generation and reconstruction, use the
+YAML-driven CLI:
+
+```bash
+# 1. Generate synthetic projection data
+gmm-ct simulate --config configs/simulate.yaml
+
+# 2. Run reconstruction on the generated data
+gmm-ct reconstruct --config configs/reconstruct.yaml
+```
+
+The simulate step writes a `projections.pt` file (observed data + times)
+and a separate `ground_truth.pt` (true parameters — not used by
+reconstruction).  The reconstruct step reads `projections.pt` via the
+path given in the YAML config.
+
+CLI flags can override config values:
+
+```bash
+gmm-ct simulate   --config configs/simulate.yaml --seed 99
+gmm-ct reconstruct --config configs/reconstruct.yaml --device cuda
+```
+
+See [configs/simulate.yaml](configs/simulate.yaml) and
+[configs/reconstruct.yaml](configs/reconstruct.yaml) for annotated
+examples.  For real tomography data, point `data.projections` to your
+measurements (`.pt` or `.npy`) and provide the matching geometry &
+physics.
+
+You can also use the legacy scripts directly:
 
 ```bash
 # Run reconstruction → saves results.pt
@@ -101,10 +134,14 @@ python scripts/analyse.py data/results/<experiment_dir>/
 gmm-ct/
 ├── gmm_ct/                       # Main package
 │   ├── __init__.py               # Public API re-exports
-│   ├── cli.py                    # CLI entry point
+│   ├── cli.py                    # CLI entry point (simulate / reconstruct)
+│   ├── simulation.py             # Synthetic data generation runner
+│   ├── reconstruct.py            # Reconstruction runner (loads data, runs fit)
 │   ├── core/
-│   │   ├── models.py             # GMM_reco class (reconstruction pipeline)
-│   │   └── optimizer.py          # L-BFGS root-finding (velocity refinement)
+│   │   ├── reconstruction.py      # GMM_reco class (4-stage fit pipeline)
+│   │   ├── forward_model.py       # ForwardModelMixin (projections, rotation)
+│   │   ├── initialization.py      # InitializationMixin (parameter init, peaks)
+│   │   └── solvers.py             # L-BFGS root-finding (velocity refinement)
 │   ├── estimation/
 │   │   ├── omega.py              # Omega estimation utilities
 │   │   └── peak_analysis.py      # Peak detection (PeakData)
@@ -114,15 +151,20 @@ gmm-ct/
 │   │   └── helpers.py            # Seeds, export, misc
 │   ├── visualization/
 │   │   ├── animations.py         # GMM & projection animations
-│   │   └── publication.py        # Publication-quality figures
+│   │   ├── publication.py        # Publication-quality figures
+│   │   └── diagnostics.py        # Diagnostic plots (trajectory, peaks)
 │   └── config/
-│       └── defaults.py           # ReconstructionConfig dataclass
+│       ├── defaults.py           # ReconstructionConfig dataclass
+│       └── yaml_config.py        # YAML loading & validation
+├── configs/
+│   ├── simulate.yaml             # Example simulation config
+│   └── reconstruct.yaml          # Example reconstruction config
 ├── scripts/
-│   ├── reconstruct.py            # Run experiment, save results
+│   ├── reconstruct.py            # Legacy script (generate + reconstruct)
 │   └── analyse.py                # Load results, compute errors, plot
 ├── tests/
 │   ├── conftest.py               # Shared fixtures
-│   └── unit/                     # 29 unit tests
+│   └── unit/                     # Unit tests
 ├── experiments/
 │   ├── demos/                    # Demo & verification scripts
 │   ├── stability/                # Stability experiments
@@ -140,21 +182,28 @@ gmm-ct/
 
 | Import path | Description |
 |---|---|
-| `gmm_ct.core.models.GMM_reco` | Main reconstruction class (4-stage pipeline) |
-| `gmm_ct.core.optimizer.NewtonRaphsonLBFGS` | L-BFGS root-finder for velocity refinement |
+| `gmm_ct.core.reconstruction.GMM_reco` | Main reconstruction class (4-stage pipeline) |
+| `gmm_ct.core.forward_model.ForwardModelMixin` | Physics: projections through rotating GMMs |
+| `gmm_ct.core.initialization.InitializationMixin` | Parameter initialization & peak detection |
+| `gmm_ct.core.solvers.NewtonRaphsonLBFGS` | L-BFGS root-finder for velocity refinement |
 | `gmm_ct.estimation.omega` | Omega estimation utilities |
 | `gmm_ct.estimation.peak_analysis.PeakData` | Peak detection data container |
 | `gmm_ct.utils.generators` | Synthetic data generation |
 | `gmm_ct.utils.geometry` | CT geometry (receiver construction) |
 | `gmm_ct.utils.helpers` | Random seeds, parameter export |
 | `gmm_ct.config.defaults` | `ReconstructionConfig`, physical constants |
+| `gmm_ct.config.yaml_config` | YAML config loading (`load_reconstruct_config`, `load_simulate_config`) |
+| `gmm_ct.simulation` | Synthetic data generation runner |
+| `gmm_ct.reconstruct` | Reconstruction runner (data loading + fit) |
 | `gmm_ct.visualization.animations` | Temporal animations |
 | `gmm_ct.visualization.publication` | Publication-ready plots |
+| `gmm_ct.visualization.diagnostics` | Diagnostic plots (trajectory, peak heights) |
 
 All commonly used symbols are also re-exported from `gmm_ct` directly:
 
 ```python
 from gmm_ct import GMM_reco, ReconstructionConfig, generate_true_param, construct_receivers
+from gmm_ct import load_reconstruct_config, run_reconstruction  # YAML workflow
 ```
 
 ## Requirements
@@ -166,6 +215,7 @@ from gmm_ct import GMM_reco, ReconstructionConfig, generate_true_param, construc
 - Matplotlib >= 3.5.0
 - dtaidistance >= 2.3.0
 - pytorch-minimize >= 0.0.2
+- PyYAML >= 6.0
 
 ## Testing
 

@@ -1,0 +1,48 @@
+# ===========================================================================
+# GMM-CT  –  Simulation Configuration
+# ===========================================================================
+# Generate synthetic projection data from a ground-truth Gaussian mixture.
+#
+# Usage:
+#   gmm-ct simulate --config configs/simulate.yaml
+#   gmm-ct simulate --config configs/simulate.yaml --seed 99
+# ===========================================================================
+
+# --- Model ----------------------------------------------------------------
+model:
+  n_gaussians: 2                     # Number of Gaussian components
+
+# --- CT Geometry ----------------------------------------------------------
+geometry:
+  sources:
+    - [-1.0, -1.0]                   # Single fan-beam source position (d-dimensional)
+
+  receivers:
+    n_receivers: 128                 # Number of detector elements
+    x_coordinate: 4.0               # X-position of the detector line
+    y_min: -3.0                      # Bottom of detector
+    y_max: 1.0                       # Top of detector
+
+# --- Known Physics --------------------------------------------------------
+# These are the parameters assumed known in the reconstruction.
+# For simulation, they also define the ground truth trajectories.
+physics:
+  initial_positions:
+    - [1.0, 1.0]                     # Shared initial position (broadcast to all Gaussians)
+
+  accelerations:
+    - [0.0, -9.81]                   # Gravity (broadcast to all Gaussians)
+
+  omega_range: [-24.0, -16.0]       # Angular velocity search bounds [min, max] (Hz)
+
+# --- Simulation Settings -------------------------------------------------
+simulation:
+  seed: 40                           # Random seed for reproducibility
+  n_projections: 65                  # Number of time steps
+  duration: 2.0                      # Time window (seconds)
+  initial_velocity: [0.75, 0.5]     # Base initial velocity (perturbations added per Gaussian)
+
+# --- Output ---------------------------------------------------------------
+output:
+  directory: data/simulated          # Where to save projections + ground truth
+  verbose: false

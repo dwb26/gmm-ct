@@ -1,6 +1,6 @@
-"""Core reconstruction algorithms and models."""
+"""Core reconstruction algorithms."""
 
-from .models import GMM_reco
-from .optimizer import NewtonRaphsonLBFGS
+from .reconstruction import GMM_reco
+from .solvers import NewtonRaphsonLBFGS
 
 __all__ = ['GMM_reco', 'NewtonRaphsonLBFGS']

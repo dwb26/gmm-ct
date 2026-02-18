@@ -9,7 +9,7 @@ import numpy as np
 from matplotlib.animation import FuncAnimation
 import matplotlib.cm as cm
 from matplotlib.patches import Ellipse, Circle
-from ..core.models import GMM_reco
+from ..core.reconstruction import GMM_reco
 from torchmin import minimize
 
 # Set seeds for reproducibility

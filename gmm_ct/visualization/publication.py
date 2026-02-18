@@ -171,7 +171,7 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
     Returns:
     - fig: Matplotlib figure object
     """
-    # from ..core.models import GMM_reco
+    # from ..core.reconstruction import GMM_reco
     import numpy as np
     
     if d != 2:
@@ -517,7 +517,7 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     Returns:
     - fig: Matplotlib figure object
     """
-    from ..core.models import GMM_reco
+    from ..core.reconstruction import GMM_reco
     import numpy as np
     
     if d != 2:
@@ -776,7 +776,7 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     - anim: Matplotlib animation object
     """
     from matplotlib.animation import FuncAnimation
-    from ..core.models import GMM_reco
+    from ..core.reconstruction import GMM_reco
     import numpy as np
     
     if d != 2:
@@ -1537,7 +1537,7 @@ def plot_trajectory_comparison(theta_true, theta_est, t, K, sources, receivers, 
     - filename: Output filename
     - title: Plot title
     """
-    from ..core.models import GMM_reco
+    from ..core.reconstruction import GMM_reco
     
     fig, ax = plt.subplots(figsize=FIGSIZE_DOUBLE)
     

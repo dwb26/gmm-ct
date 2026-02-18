@@ -5,6 +5,7 @@ matplotlib>=3.5.0
 scipy>=1.7.0
 dtaidistance>=2.3.0
 torchmin>=0.0.2
+pyyaml>=6.0
 
 # Development dependencies (uncomment if needed)
 # pytest>=7.0

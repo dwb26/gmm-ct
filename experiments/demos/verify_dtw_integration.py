@@ -26,7 +26,7 @@ except ImportError as e:
 # Test 2: Load GMM_reco class
 print("\n2. Loading GMM_reco class...")
 try:
-    from gmm_ct.core.models import GMM_reco
+    from gmm_ct.core.reconstruction import GMM_reco
     print("   ✓ GMM_reco loaded successfully")
 except Exception as e:
     print(f"   ✗ Failed to load GMM_reco: {e}")

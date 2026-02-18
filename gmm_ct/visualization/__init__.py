@@ -6,6 +6,11 @@ from .animations import (
     save_GMM_with_projection_comparison,
     save_optimization_stages_animation,
 )
+from .diagnostics import (
+    plot_trajectory_estimations,
+    plot_heights_by_assignment,
+    plot_raw_receiver_heights,
+)
 from .publication import (
     plot_individual_gaussian_reconstruction,
     plot_temporal_gmm_comparison,
@@ -24,6 +29,10 @@ __all__ = [
     'save_projection_comparison_animation',
     'save_GMM_with_projection_comparison',
     'save_optimization_stages_animation',
+    # Diagnostics
+    'plot_trajectory_estimations',
+    'plot_heights_by_assignment',
+    'plot_raw_receiver_heights',
     # Publication plots
     'plot_individual_gaussian_reconstruction',
     'plot_temporal_gmm_comparison',
