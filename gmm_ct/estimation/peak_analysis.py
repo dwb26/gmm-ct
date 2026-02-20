@@ -136,6 +136,10 @@ class PeakData:
                     dtype=torch.float64, 
                     device=self.device
                 )
+            else:
+                self.times[k] = torch.tensor(
+                    [], dtype=torch.float64, device=self.device
+                )
     
     def add_optimal_assignment(self, gaussian_idx, time_idx, height, value):
         """

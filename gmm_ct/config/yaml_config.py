@@ -159,6 +159,36 @@ class OutputConfig:
 
 
 @dataclass
+class AnalysisConfig:
+    """Settings for post-reconstruction analysis.
+
+    Controls whether error metrics are computed, comparison plots are
+    generated, and animations are rendered after reconstruction.
+
+    Parameters
+    ----------
+    enabled : bool
+        Run analysis automatically after reconstruction (requires
+        ground-truth data alongside the projection file).
+    skip_errors : bool
+        Skip parameter & projection error computation.
+    skip_plots : bool
+        Skip static comparison plots.
+    skip_animations : bool
+        Skip animation rendering (can be slow).
+    time_indices : list of int or None
+        Time indices for temporal comparison plots.  ``None`` means
+        auto-select.
+    """
+
+    enabled: bool = True
+    skip_errors: bool = False
+    skip_plots: bool = False
+    skip_animations: bool = False
+    time_indices: Optional[List[int]] = None
+
+
+@dataclass
 class SimulationSettings:
     """Settings specific to synthetic data generation.
 
@@ -200,6 +230,7 @@ class ReconstructConfig:
         default_factory=ReconstructionSettings
     )
     output: OutputConfig = field(default_factory=OutputConfig)
+    analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
     device: Optional[str] = None
 
 
@@ -291,6 +322,15 @@ def load_reconstruct_config(path: Union[str, Path]) -> ReconstructConfig:
     with open(path) as f:
         raw = yaml.safe_load(f)
 
+    analysis_raw = raw.get("analysis", {})
+    analysis_cfg = AnalysisConfig(
+        enabled=analysis_raw.get("enabled", True),
+        skip_errors=analysis_raw.get("skip_errors", False),
+        skip_plots=analysis_raw.get("skip_plots", False),
+        skip_animations=analysis_raw.get("skip_animations", False),
+        time_indices=analysis_raw.get("time_indices"),
+    )
+
     return ReconstructConfig(
         data_path=raw["data"]["projections"],
         n_gaussians=raw["model"]["n_gaussians"],
@@ -298,6 +338,7 @@ def load_reconstruct_config(path: Union[str, Path]) -> ReconstructConfig:
         physics=_parse_physics(raw["physics"]),
         reconstruction=_parse_reconstruction(raw.get("reconstruction", {})),
         output=_parse_output(raw.get("output", {})),
+        analysis=analysis_cfg,
         device=raw.get("device"),
     )
 

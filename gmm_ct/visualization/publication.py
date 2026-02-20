@@ -47,9 +47,14 @@ def match_estimated_to_true_gaussians(theta_true, theta_est, K):
     Match each estimated Gaussian to the closest true Gaussian based on parameter distance.
     
     Uses a weighted combination of:
+    - Initial velocity (v0) distance  — primary discriminator
+    - Angular velocity (omega) distance
     - Initial position (x0) distance
-    - Initial velocity (v0) distance  
-    - Initial acceleration (a0) distance
+    - Attenuation coefficient (alpha) distance
+    
+    Velocity is weighted highest because in projectile-motion models the
+    initial positions and accelerations are typically shared across all
+    Gaussians, making v0 (and omega) the only per-Gaussian discriminators.
     
     Returns a list of indices where matching_indices[k_est] = k_true
     """
@@ -60,23 +65,33 @@ def match_estimated_to_true_gaussians(theta_true, theta_est, K):
     
     for k_est in range(K):
         for k_true in range(K):
-            # Extract parameters
-            x0_est = theta_est['x0s'][k_est].detach().cpu().numpy()
-            x0_true = theta_true['x0s'][k_true].detach().cpu().numpy()
-            
+            # Velocity — primary discriminator
             v0_est = theta_est['v0s'][k_est].detach().cpu().numpy()
             v0_true = theta_true['v0s'][k_true].detach().cpu().numpy()
-            
-            a0_est = theta_est['a0s'][k_est].detach().cpu().numpy()
-            a0_true = theta_true['a0s'][k_true].detach().cpu().numpy()
-            
-            # Compute weighted distance (position is most important)
-            dist_x0 = np.linalg.norm(x0_est - x0_true)
             dist_v0 = np.linalg.norm(v0_est - v0_true)
-            dist_a0 = np.linalg.norm(a0_est - a0_true)
             
-            # Weight: position > velocity > acceleration
-            cost_matrix[k_est, k_true] = 10.0 * dist_x0 + 3.0 * dist_v0 + 1.0 * dist_a0
+            # Angular velocity
+            omega_est = theta_est['omegas'][k_est].detach().cpu().numpy()
+            omega_true = theta_true['omegas'][k_true].detach().cpu().numpy()
+            dist_omega = np.linalg.norm(omega_est - omega_true)
+            
+            # Position (often shared, but include for generality)
+            x0_est = theta_est['x0s'][k_est].detach().cpu().numpy()
+            x0_true = theta_true['x0s'][k_true].detach().cpu().numpy()
+            dist_x0 = np.linalg.norm(x0_est - x0_true)
+            
+            # Amplitude
+            alpha_est = theta_est['alphas'][k_est].detach().cpu().item()
+            alpha_true = theta_true['alphas'][k_true].detach().cpu().item()
+            dist_alpha = abs(alpha_est - alpha_true)
+            
+            # Weight: velocity >> omega > position > amplitude
+            cost_matrix[k_est, k_true] = (
+                10.0 * dist_v0
+                + 3.0 * dist_omega
+                + 1.0 * dist_x0
+                + 0.5 * dist_alpha
+            )
     
     # Use Hungarian algorithm to find optimal matching
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
@@ -535,25 +550,14 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     print(f"\nCreating Figure 3: Temporal GMM Comparison (Symmetric Layout)...")
     print(f"Time points: {[f'{t_val.item():.3f}s' for t_val in selected_times]}")
     
-    # Note: theta_est should already be reordered to match theta_true via reorder_theta_to_match_true()
-    # If not pre-processed, do the matching here
-    try:
-        # Check if parameters are tensors (original) or already matched
-        if hasattr(theta_est['x0s'][0], 'device'):
-            # Assume already matched if we got here without error
-            theta_est_reordered = theta_est
-    except:
-        # Fall back to matching if needed
-        matching_indices = match_estimated_to_true_gaussians(theta_true, theta_est, K)
-        print(f"Gaussian matching (est → true): {matching_indices}")
-        theta_est_reordered = {
-            'x0s': [theta_est['x0s'][i] for i in matching_indices],
-            'v0s': [theta_est['v0s'][i] for i in matching_indices],
-            'a0s': [theta_est['a0s'][i] for i in matching_indices],
-            'omegas': [theta_est['omegas'][i] for i in matching_indices],
-            'alphas': [theta_est['alphas'][i] for i in matching_indices],
-            'U_skews': [theta_est['U_skews'][i] for i in matching_indices]
-        }
+    # Reorder estimated parameters to match true Gaussians for consistent
+    # color-coding.  The caller *should* pre-sort via
+    # reorder_theta_to_match_true(), but we apply it unconditionally here
+    # so that the plot is always correct.
+    theta_est_reordered, matching_indices = reorder_theta_to_match_true(
+        theta_true, theta_est, K
+    )
+    print(f"Gaussian matching (est → true): {matching_indices}")
     
     # Determine spatial bounds if not provided
     if spatial_bounds is None:
@@ -782,9 +786,11 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     if d != 2:
         raise NotImplementedError("Temporal GMM animation currently only supports 2D")
     
-    # Note: theta_est should already be reordered to match theta_true via reorder_theta_to_match_true()
-    # Use as-is (assume pre-processed)
-    theta_est_reordered = theta_est
+    # Reorder estimated parameters to match true Gaussians for consistent
+    # color-coding.
+    theta_est_reordered, _ = reorder_theta_to_match_true(
+        theta_true, theta_est, K
+    )
     
     # Generate projections
     GMM_true_obj = GMM_reco(d, K, sources, receivers, 

@@ -639,7 +639,8 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
             observed_heights = torch.stack([item[1] for item in assignments_k])
             predicted_heights = r_maxs_list[k][time_indices, 1]
 
-            loss += torch.norm(predicted_heights - observed_heights, p=2)
+            # loss += torch.norm(predicted_heights - observed_heights, p=2)
+            loss += torch.norm(predicted_heights - observed_heights, p=1)
 
         return loss
 

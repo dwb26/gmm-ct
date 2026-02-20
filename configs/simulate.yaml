@@ -10,7 +10,7 @@
 
 # --- Model ----------------------------------------------------------------
 model:
-  n_gaussians: 2                     # Number of Gaussian components
+  n_gaussians: 3                     # Number of Gaussian components
 
 # --- CT Geometry ----------------------------------------------------------
 geometry:
@@ -37,7 +37,7 @@ physics:
 
 # --- Simulation Settings -------------------------------------------------
 simulation:
-  seed: 40                           # Random seed for reproducibility
+  seed: 41                           # Random seed for reproducibility
   n_projections: 65                  # Number of time steps
   duration: 2.0                      # Time window (seconds)
   initial_velocity: [0.75, 0.5]     # Base initial velocity (perturbations added per Gaussian)

@@ -11,13 +11,13 @@
 # --- Input Data -----------------------------------------------------------
 data:
   # projections: data/simulated/projections.pt   # Path to projection data file (.pt or .npy)
-  projections: data/simulated/20260218_174519_seed40_N2/projections.pt
+  projections: data/simulated/20260220_113014_seed41_N3/projections.pt
   # For .pt files: expects dict with keys "projections" and "times"
   # For .npy files: expects a companion times.npy in the same directory
 
 # --- Model ----------------------------------------------------------------
 model:
-  n_gaussians: 2                     # Number of Gaussian components to fit
+  n_gaussians: 3                     # Number of Gaussian components to fit
 
 # --- CT Geometry ----------------------------------------------------------
 # Must match the geometry used to acquire the projection data.
@@ -44,16 +44,26 @@ physics:
 # --- Reconstruction Settings ---------------------------------------------
 reconstruction:
   n_trajectory_trials: null          # Multi-start trials for trajectory opt (null = auto)
-  n_omega_inits: null                # Random omega starts for joint opt (null = auto)
+  n_omega_inits: 15                # Random omega starts for joint opt (null = auto)
   max_iterations: 500                # Maximum L-BFGS iterations
   tolerance: 1.0e-5                  # Convergence tolerance
 
 # --- Output ---------------------------------------------------------------
 output:
-  directory: results/                # Where to save estimated parameters
+  directory: data/results/           # Where to save estimated parameters
   save_plots: true                   # Save diagnostic plots
   save_animations: true              # Save animations
   verbose: false
+
+# --- Analysis (post-reconstruction) --------------------------------------
+# Automatically runs error metrics and comparison plots when ground truth
+# is available (ground_truth.pt alongside the projection data).
+analysis:
+  enabled: true                      # Set to false to skip entirely
+  skip_errors: false                 # Skip parameter & projection error metrics
+  skip_plots: false                  # Skip static comparison plots
+  skip_animations: false             # Skip animation rendering (can be slow)
+  time_indices: null                 # Time indices for temporal plots (null = auto)
 
 # --- Device (optional) ----------------------------------------------------
 # device: cuda                       # Uncomment to force GPU

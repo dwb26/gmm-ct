@@ -34,7 +34,7 @@ from .visualization.publication import (
 from .config.defaults import ReconstructionConfig
 from .config.yaml_config import load_reconstruct_config, load_simulate_config
 from .simulation import run_simulation
-from .reconstruct import run_reconstruction
+from .reconstruct import run_reconstruction, analyse_results
 
 # Define what gets imported with "from gmm_ct import *"
 __all__ = [
@@ -47,6 +47,7 @@ __all__ = [
     'load_simulate_config',
     'run_simulation',
     'run_reconstruction',
+    'analyse_results',
     
     # Parameter generation and utilities
     'generate_true_param',

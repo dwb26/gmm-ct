@@ -24,7 +24,7 @@ def _add_common_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--config",
         type=str,
-        required=True,
+        required=False,
         help="Path to YAML configuration file",
     )
     parser.add_argument(
@@ -87,6 +87,16 @@ def main(argv=None):
         default=None,
         help="Override projection data path from config",
     )
+    reco_parser.add_argument(
+        "--skip-analysis",
+        action="store_true",
+        help="Skip post-reconstruction analysis (error metrics + plots)",
+    )
+    reco_parser.add_argument(
+        "--skip-animations",
+        action="store_true",
+        help="Skip animation generation (plots and errors still run)",
+    )
 
     # --- parse -----------------------------------------------------------
     args = parser.parse_args(argv)
@@ -113,7 +123,12 @@ def _run_simulate(args) -> int:
     from .config.yaml_config import load_simulate_config
     from .simulation import run_simulation
 
-    cfg = load_simulate_config(args.config)
+    if args.config is None:
+        cfg_path = Path("configs/simulate.yaml")
+        cfg = load_simulate_config(cfg_path)
+        print(f"No config specified, using default: {cfg_path}")
+    else:
+        cfg = load_simulate_config(args.config)
 
     # Apply CLI overrides
     if args.device:
@@ -139,7 +154,7 @@ def _run_simulate(args) -> int:
 def _run_reconstruct(args) -> int:
     from .config.yaml_config import load_reconstruct_config
     from .reconstruct import run_reconstruction
-
+    
     cfg = load_reconstruct_config(args.config)
 
     # Apply CLI overrides
@@ -148,7 +163,11 @@ def _run_reconstruct(args) -> int:
     if args.output_dir:
         cfg.output.directory = Path(args.output_dir)
     if args.data:
-        cfg.data_path = args.data
+        cfg.data_path = args.data; print(f"Overriding data path: {cfg.data_path}")
+    if args.skip_analysis:
+        cfg.analysis.enabled = False
+    if args.skip_animations:
+        cfg.analysis.skip_animations = True
 
     print("=" * 50)
     print("GMM-CT  –  Reconstruct")

@@ -12,7 +12,7 @@ import numpy as np
 from ..config.defaults import GRAVITATIONAL_ACCELERATION
 
 
-def generate_true_param(d, K, initial_location, initial_velocity, initial_acceleration, min_rot, max_rot, device=None):
+def generate_true_param(d, K, initial_location, initial_velocity, initial_acceleration, min_rot, max_rot, device=None, sampling_dt=None):
     """
     Generate synthetic "true" parameters for GMM reconstruction testing.
     
@@ -37,6 +37,12 @@ def generate_true_param(d, K, initial_location, initial_velocity, initial_accele
         Maximum angular velocity for rotation
     device : torch.device, optional
         Device to place tensors on (default: CPU)
+    sampling_dt : float, optional
+        Time interval between projections.  When provided, generated
+        angular velocities are checked against the Nyquist-like
+        aliasing condition for 2-D ellipses (π-symmetry): any ω
+        for which ``|2πωΔt mod π| < ε`` would make the Gaussian
+        appear non-rotating and is therefore rejected and re-sampled.
         
     Returns
     -------
@@ -96,14 +102,35 @@ def generate_true_param(d, K, initial_location, initial_velocity, initial_accele
                 upper_idx += 1
         U_ks.append(U_k)
 
-    # Rotation parameters
-    omegas = [
-        max_rot - torch.rand(size=(math.comb(d, 2),), dtype=torch.float64, device=device) * (max_rot - min_rot) 
-        for _ in range(K)
-    ]
+    # Rotation parameters — reject omegas that alias with the sampling rate.
+    # A 2-D ellipse is π-periodic, so aliasing occurs when the per-step
+    # rotation angle 2πωΔt is close to a multiple of π, i.e. when
+    # |ω| ≈ n / (2Δt) for integer n.
+    alias_buffer = 0.10  # fractional guard band (±10 % of the π period)
+
+    def _is_aliased(omega_val):
+        """Return True if omega would appear non-rotating at the given dt."""
+        if sampling_dt is None:
+            return False
+        frac = abs(omega_val * 2 * sampling_dt) % 1  # fraction of a half-turn
+        return frac < alias_buffer or frac > 1 - alias_buffer
+
+    omegas = []
+    for k in range(K):
+        for _attempt in range(200):
+            omega_k = (
+                max_rot
+                - torch.rand(size=(math.comb(d, 2),), dtype=torch.float64,
+                             device=device)
+                * (max_rot - min_rot)
+            )
+            if not any(_is_aliased(w.item()) for w in omega_k):
+                break
+        omegas.append(omega_k)
+
     print("Generated angular velocities (omegas):")
     for k in range(K):
-        print(f"Gaussian {k+1}: {omegas[k].cpu().numpy()}")
+        print(f"  Gaussian {k+1}: {omegas[k].cpu().numpy()}")
     
     # Projectile motion parameters
     # Initial locations (assumed known for all Gaussians)

@@ -79,8 +79,10 @@ def run_simulation(cfg: SimulateConfig) -> Path:
         cfg.simulation.initial_velocity, dtype=torch.float64, device=device
     )
     # generate_true_param also takes x0, v0, a0 base vectors
+    dt = cfg.simulation.duration / (cfg.simulation.n_projections - 1)
     theta_true = generate_true_param(
-        d, N, x0s[0], v_base, a0s[0], omega_min, omega_max, device=device
+        d, N, x0s[0], v_base, a0s[0], omega_min, omega_max,
+        device=device, sampling_dt=dt,
     )
 
     # --- Generate projection data ---

@@ -48,14 +48,21 @@ def plot_trajectory_estimations(model, res):
             label=f'Cluster {k}', lw=1,
         )
 
+        rcvrs_k = model.maximising_rcvrs[k]
+        if len(rcvrs_k) == 0:
+            continue
+
         rcvr_heights = torch.zeros(
-            len(model.maximising_rcvrs[k]),
-            dtype=torch.float64, device=model.device,
+            len(rcvrs_k), dtype=torch.float64, device=model.device,
         )
-        for i in range(len(model.maximising_rcvrs[k])):
-            rcvr_heights[i] = model.maximising_rcvrs[k][i][1]
+        for i in range(len(rcvrs_k)):
+            rcvr_heights[i] = rcvrs_k[i][1]
+
+        t_obs_k = model.t_obs_by_cluster[k]
+        if isinstance(t_obs_k, list):
+            t_obs_k = torch.tensor(t_obs_k, dtype=torch.float64, device=model.device)
         ax.scatter(
-            model.t_obs_by_cluster[k].cpu(), rcvr_heights.cpu(),
+            t_obs_k.cpu(), rcvr_heights.cpu(),
             label=k, s=10, color='black',
         )
 
