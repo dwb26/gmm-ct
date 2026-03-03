@@ -757,7 +757,7 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
 def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est, 
                                      t, K, d, filename=None, fps=10,
                                      show_trajectories=True,
-                                     title='Reconstructed', 
+                                     title='', 
                                      title_fontsize=20, label_fontsize=18, tick_fontsize=16):
     """
     Create an animation showing temporal evolution of ground truth and estimated GMMs.
@@ -815,7 +815,7 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     # Create figure with 1 row, 3 columns
     fig = plt.figure(figsize=(18, 6), dpi=DPI)
     gs = GridSpec(1, 3, figure=fig, hspace=0.15, wspace=0.12, width_ratios=[1.2, 0.8, 1.2],
-                  top=0.85, bottom=0.12)  # Adjust top margin to make room for time display
+                  top=0.90, bottom=0.12)
     
     # Color map
     colors = plt.cm.rainbow(np.linspace(0, 1, K))
@@ -868,10 +868,11 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     ax_right.tick_params(axis='y', which='major', labelleft=False)
     ax_right.grid(True, alpha=0.3, linestyle='--')
     ax_right.set_facecolor('#f8f9fa')
-    ax_right.set_title(title, fontweight='bold', fontsize=title_fontsize, pad=12)
+    ax_right.set_title('Reconstruction', fontweight='bold', fontsize=title_fontsize, pad=12)
     
     # Negate x-tick labels to show positive values on right side
     xticks = ax_right.get_xticks()
+    ax_right.set_xticks(xticks)
     ax_right.set_xticklabels([f'{int(-x)}' for x in xticks])
     
     # Plot trajectories (static background)
@@ -888,14 +889,15 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     center_artists = []
     right_artists = []
     
-    # Add time counter as suptitle (more reliable for animations)
-    time_text = fig.suptitle('t = 0.000 s', fontsize=title_fontsize + 2, fontweight='bold',
-                             y=0.98, bbox=dict(boxstyle='round,pad=0.5', facecolor='yellow', 
-                                              edgecolor='black', linewidth=2))
+    fig.suptitle(title, fontsize=title_fontsize, fontweight='bold', y=0.98)
 
     def init():
-        time_text.set_text('t = 0.000 s')  # Show initial time so we know it's working
-        return [time_text]
+        t0 = t[0].item()
+        ax_left.set_title(f'Ground Truth  (t = {t0:.3f} s)',
+                          fontweight='bold', fontsize=title_fontsize, pad=12)
+        ax_right.set_title(f'Reconstruction  (t = {t0:.3f} s)',
+                           fontweight='bold', fontsize=title_fontsize, pad=12)
+        return []
     
     def update(frame):
         # Clear previous dynamic elements
@@ -906,8 +908,11 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         right_artists.clear()
         
         t_val = t[frame].item()
-        time_text.set_text(f't = {t_val:.3f} s')
-        
+        ax_left.set_title(f'Ground Truth  (t = {t_val:.3f} s)',
+                          fontweight='bold', fontsize=title_fontsize, pad=12)
+        ax_right.set_title(f'Reconstruction  (t = {t_val:.3f} s)',
+                           fontweight='bold', fontsize=title_fontsize, pad=12)
+
         # Plot GMMs at current time
         plot_gmm_snapshot_animated(ax_left, theta_true, t_val, K, d, colors, 
                                    left_artists, is_true=True, mirror=False)
@@ -924,7 +929,7 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         sorted_proj_est = proj_est_t[sorted_indices]
         
         line_true, = ax_center.plot(sorted_proj_true, sorted_heights,
-                                     linestyle='-', color='blue', linewidth=2.5,
+                                     linestyle='-', color='black', linewidth=2.5,
                                      label='True' if frame == 0 else '', alpha=0.8)
         line_est, = ax_center.plot(sorted_proj_est, sorted_heights,
                                     linestyle='--', color='red', linewidth=2.5,
@@ -935,7 +940,7 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         if frame == 0:
             ax_center.legend(fontsize=12, loc='upper right', framealpha=0.9)
         
-        return left_artists + center_artists + right_artists + [time_text]
+        return left_artists + center_artists + right_artists
     
     # Create animation (blit=False to ensure suptitle is updated)
     anim = FuncAnimation(fig, update, init_func=init, frames=len(t),

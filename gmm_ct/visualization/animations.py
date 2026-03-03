@@ -160,7 +160,7 @@ class GMM_plotting(GMM_reco):
         
         plt.title(f"Time {self.t_n.item():.3f}, omega_k = {omega_val:.6f}, U_k = {U_skew_str}")
         plt.xlabel('Receiver Height', fontsize=20, fontweight='bold')
-        plt.ylabel('Projection Value', fontsize=20, fontweight='bold')
+        plt.ylabel('Intensity', fontsize=20, fontweight='bold')
         plt.legend(fontsize=14, framealpha=0.9)
         plt.grid(True, alpha=0.3, linestyle='--')
         plt.tick_params(labelsize=16)
@@ -903,6 +903,11 @@ def _plot_gaussian_ellipses(ax, trajectories, frame, theta_true,
 
 def _plot_projection_data(ax, projs_by_source, t, frame, sources, receivers, d, style='true'):
     """Plot projection data for the current frame."""
+    # Normalise projs_by_source: accept either a list[tensor(n_time, n_rcvrs)]
+    # (one per source) or a bare tensor(n_time, n_rcvrs) for the single-source case.
+    if isinstance(projs_by_source, torch.Tensor):
+        projs_by_source = [projs_by_source]
+
     if d == 2:
         for n_s, source in enumerate(sources):
             projs = projs_by_source[n_s]
@@ -935,7 +940,7 @@ def _plot_projection_data(ax, projs_by_source, t, frame, sources, receivers, d, 
         title_prefix = 'Est. ' if style == 'estimated' else ''
         ax.set_title(f'{title_prefix}Projection at Time {t[frame]:.2f}s')
         ax.set_ylabel('')
-        ax.set_xlabel('Projection Value')
+        ax.set_xlabel('Intensity')
         
         # Y-limits will be synchronized in the main animate function
     elif d == 3:  # Should be a 2D projection
@@ -1347,7 +1352,7 @@ def animate_projection_comparison(proj_data, sim_projs, t, sources, receivers, d
             ax1.set_xlim(sorted_y_positions.min() - 0.1, sorted_y_positions.max() + 0.1)
             ax1.set_ylim(min_proj_value - x_margin, max_proj_value + x_margin)
             ax1.set_xlabel('Receiver Position (Low → High)')
-            ax1.set_ylabel('Projection Value')
+            ax1.set_ylabel('Intensity')
             ax1.grid(True, alpha=0.3)
             
             # Plot maximum value as black circle
@@ -1726,7 +1731,7 @@ def animate_GMM_with_projection_comparison(theta_true, d, K, sources, rcvrs, t, 
         ax_proj_comp.set_xlim(sorted_y_positions.min() - 0.1, sorted_y_positions.max() + 0.1)
         ax_proj_comp.set_ylim(min_proj_value - x_margin, max_proj_value + x_margin)
         ax_proj_comp.set_xlabel('Receiver Position (Low → High)', fontsize=12)
-        ax_proj_comp.set_ylabel('Projection Value', fontsize=12)
+        ax_proj_comp.set_ylabel('Intensity', fontsize=12)
         ax_proj_comp.set_title(f'Projection Comparison - Iteration {iteration_idx}, Time: {t_np[frame]:.3f}s', fontweight='bold')
         ax_proj_comp.grid(True, alpha=0.3)
         ax_proj_comp.legend()
@@ -2056,7 +2061,7 @@ def animate_optimization_stages(theta_true, theta_init, theta_after_traj, theta_
             ax.set_xlim(sorted_y_positions.min() - 0.1, sorted_y_positions.max() + 0.1)
             ax.set_ylim(min_proj_value - x_margin, max_proj_value + x_margin)
             ax.set_xlabel('Receiver Position', fontsize=10)
-            ax.set_ylabel('Projection Value', fontsize=10)
+            ax.set_ylabel('Intensity', fontsize=10)
             ax.set_title(f'{stage_title}\nTime: {t_np[frame]:.3f}s', fontsize=11, fontweight='bold')
             ax.grid(True, alpha=0.3)
             ax.legend(fontsize=9)

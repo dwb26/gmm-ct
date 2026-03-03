@@ -274,10 +274,19 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
             plot_trajectory_estimations,
             plot_heights_by_assignment,
             plot_raw_receiver_heights,
+            plot_assignment_quality,
+            plot_gmm_and_projections,
+            plot_trajectory_fitting,
         )
         plot_trajectory_estimations(self, best_res)
         plot_raw_receiver_heights(self)
         plot_heights_by_assignment(self)
+        plot_assignment_quality(self, best_res)
+        plot_gmm_and_projections(
+            self, best_res,
+            theta_true=getattr(self, 'theta_true', None),
+        )
+        plot_trajectory_fitting(self, best_res)
 
         soln_dict = self.refine_initial_velocities_via_newton_raphson(
             soln_dict, best_res,

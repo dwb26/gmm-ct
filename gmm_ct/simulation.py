@@ -54,7 +54,6 @@ def run_simulation(cfg: SimulateConfig) -> Path:
         device = torch.device(cfg.device)
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
 
     # --- Geometry ---
     sources, receivers = cfg.geometry.to_tensors(device)
@@ -134,9 +133,9 @@ def run_simulation(cfg: SimulateConfig) -> Path:
     )
 
     elapsed = wall_clock() - start
-    print(f"\nSimulation complete in {elapsed:.1f}s")
-    print(f"  Projections : {experiment_dir / 'projections.pt'}")
-    print(f"  Ground truth: {experiment_dir / 'ground_truth.pt'}")
-    print(f"  Parameters  : {experiment_dir / 'true_parameters.md'}")
+    # print(f"\nSimulation complete in {elapsed:.1f}s")
+    # print(f"  Projections : {experiment_dir / 'projections.pt'}")
+    # print(f"  Ground truth: {experiment_dir / 'ground_truth.pt'}")
+    # print(f"  Parameters  : {experiment_dir / 'true_parameters.md'}")
 
     return experiment_dir

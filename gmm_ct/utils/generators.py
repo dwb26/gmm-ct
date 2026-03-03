@@ -7,10 +7,6 @@ for testing and validation of the GMM reconstruction algorithm.
 
 import math
 import torch
-import numpy as np
-
-from ..config.defaults import GRAVITATIONAL_ACCELERATION
-
 
 def generate_true_param(d, K, initial_location, initial_velocity, initial_acceleration, min_rot, max_rot, device=None, sampling_dt=None):
     """
@@ -102,12 +98,7 @@ def generate_true_param(d, K, initial_location, initial_velocity, initial_accele
                 upper_idx += 1
         U_ks.append(U_k)
 
-    # Rotation parameters — reject omegas that alias with the sampling rate.
-    # A 2-D ellipse is π-periodic, so aliasing occurs when the per-step
-    # rotation angle 2πωΔt is close to a multiple of π, i.e. when
-    # |ω| ≈ n / (2Δt) for integer n.
     alias_buffer = 0.10  # fractional guard band (±10 % of the π period)
-
     def _is_aliased(omega_val):
         """Return True if omega would appear non-rotating at the given dt."""
         if sampling_dt is None:
@@ -127,10 +118,6 @@ def generate_true_param(d, K, initial_location, initial_velocity, initial_accele
             if not any(_is_aliased(w.item()) for w in omega_k):
                 break
         omegas.append(omega_k)
-
-    print("Generated angular velocities (omegas):")
-    for k in range(K):
-        print(f"  Gaussian {k+1}: {omegas[k].cpu().numpy()}")
     
     # Projectile motion parameters
     # Initial locations (assumed known for all Gaussians)

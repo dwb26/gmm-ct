@@ -36,11 +36,6 @@ def set_random_seeds(seed=42):
     # Update global random number generator
     rng = np.random.default_rng(seed)
     
-    print(f"🎲 Random seeds set to {seed} for reproducibility")
-    print("   ✅ PyTorch seed set")
-    print("   ✅ NumPy seed set") 
-    print("   ✅ Global random generator updated")
-    
     return rng
     
     

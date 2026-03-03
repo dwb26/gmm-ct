@@ -97,12 +97,12 @@ class InitializationMixin:
         proj_data_array = proj_data[0] if isinstance(proj_data, list) else proj_data
         receivers = self.receivers[0]
 
-        print(f"\nDetecting peaks in {len(t)} time points...")
+        # print(f"\nDetecting peaks in {len(t)} time points...")
         self._detect_all_peaks(proj_data_array, receivers, t)
 
         self.peak_data.finalize_detections()
         self._create_legacy_aliases()
-        self.peak_data.summary()
+        # self.peak_data.summary()
 
         return self._create_random_initial_velocities()
 

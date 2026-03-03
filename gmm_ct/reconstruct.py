@@ -117,8 +117,19 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
     else:
         proj_data_input = proj_data
 
+    # --- Pre-load ground truth so diagnostic plots can show the true GMM ---
+    _data_dir_early = Path(cfg.data_path).parent
+    _gt_path_early = _data_dir_early / "ground_truth.pt"
+    if _gt_path_early.exists():
+        try:
+            _gt_early = torch.load(_gt_path_early, map_location=device,
+                                   weights_only=False)
+            model.theta_true = _gt_early["theta_true"]
+        except Exception:
+            pass  # ground truth unavailable; diagnostics fall back gracefully
+
     soln_dict = model.fit(proj_data_input, t)
-    
+
     # --- Output directory ---
     N = cfg.n_gaussians
     out_dir = Path(cfg.output.directory)
