@@ -10,9 +10,7 @@
 
 # --- Input Data -----------------------------------------------------------
 data:
-  # projections: data/simulated/projections.pt   # Path to projection data file (.pt or .npy)
-  projections: data/simulated/20260218_163511_seed40_N2/projections.pt
-  # projections: data/simulated/20260222_202045_seed41_N5/projections.pt
+  projections: data/simulated/20260310_132235_seed3_N5/projections.pt
   # For .pt files: expects dict with keys "projections" and "times"
   # For .npy files: expects a companion times.npy in the same directory
 
@@ -40,13 +38,14 @@ physics:
   accelerations:
     - [0.0, -9.81]                   # Known acceleration (broadcast to all Gaussians)
 
-  # omega_range: [-24.0, -16.0]       # Angular velocity search bounds [min, max] (Hz)
-  omega_range: [16.0, 24.0]       # Angular velocity search bounds [min, max] (Hz)
+  omega_range: [2.0, 6.0]       # Angular velocity search bounds [min, max] (Hz)
 
 # --- Reconstruction Settings ---------------------------------------------
 reconstruction:
   n_trajectory_trials: null          # Multi-start trials for trajectory opt (null = auto)
-  n_omega_inits: 3                # Random omega starts for joint opt (null = auto) (was 15)
+  n_omega_inits: 3                   # Trial cap for joint opt (fixed count, or cap when threshold active)
+  omega_sup_threshold: 0.5           # Stop early when max|sim-obs| < this value (null = fixed count)
+  omega_max_trials: 15               # Hard cap when threshold active (null = use n_omega_inits)
   max_iterations: 500                # Maximum L-BFGS iterations
   tolerance: 1.0e-5                  # Convergence tolerance
 

@@ -57,12 +57,21 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
     N_traj_trials : int, optional
         Number of multi-start trials for trajectory optimization.
     n_omega_inits : int, optional
-        Number of random multi-start trials for omega search.
+        Number of random multi-start trials for omega search (hard cap when
+        ``omega_sup_threshold`` is active; fixed count otherwise).
+    omega_sup_threshold : float, optional
+        Stop the joint multi-start loop early when the supremum projection
+        error ``max_{t,r} |sim(t,r) − obs(t,r)|`` drops below this value.
+        If None (default), runs exactly ``n_omega_inits`` trials.
+    omega_max_trials : int, optional
+        Hard upper bound on trials when ``omega_sup_threshold`` is set.
+        Defaults to ``n_omega_inits`` when None.
     """
 
     def __init__(self, d, N, sources, receivers, x0s, a0s,
                  omega_min, omega_max, device=None, output_dir=None,
-                 N_traj_trials=None, n_omega_inits=None):
+                 N_traj_trials=None, n_omega_inits=None,
+                 omega_sup_threshold=None, omega_max_trials=None):
         self.d = d
         self.N = N
 
@@ -75,7 +84,8 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
         # Search configuration
         self.N_traj_trials = N_traj_trials
         self.n_omega_inits = n_omega_inits
-        # self.use_fft_omega = True
+        self.omega_sup_threshold = omega_sup_threshold
+        self.omega_max_trials = omega_max_trials
 
         # Device management
         if device is None:
@@ -168,6 +178,8 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
             output_dir=cfg.output.directory,
             N_traj_trials=cfg.reconstruction.n_trajectory_trials,
             n_omega_inits=cfg.reconstruction.n_omega_inits,
+            omega_sup_threshold=cfg.reconstruction.omega_sup_threshold,
+            omega_max_trials=cfg.reconstruction.omega_max_trials,
         )
 
     # ==================================================================
@@ -201,16 +213,19 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
         # Stage 1: Trajectory optimization
         soln_dict = self._stage_trajectory_optimization(t, proj_data)
 
-        # Stage 2: Multi-start joint optimization (rotation + morphology)
-        soln_dict, best_loss = self._stage_multistart_joint(soln_dict)
+        # Stage 1.5: ω initialization via model-fit grid search
+        soln_dict = self._stage_omega_initialization(soln_dict)
 
-        # Stage 3: Fine grid search for omega refinement
+        # Stage 2: Multi-start joint optimization (ω + morphology)
+        soln_dict, best_sup_err = self._stage_multistart_joint(soln_dict, warm_start=True)
+
+        # Stage 3: Fine grid search for ω refinement
         print(f"\n{'='*50}")
         print("Fine grid search around multi-start solution "
               "(±3 Hz, 0.1 Hz steps)...")
         print(f"{'='*50}")
         soln_dict = self._fine_grid_search_omega(
-            soln_dict, best_loss, omega_range=3.0, omega_step=0.1,
+            soln_dict, best_sup_err, omega_range=3.0, omega_step=0.1,
         )
 
         # Stage 4: Final joint refinement
@@ -308,38 +323,169 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
 
         return soln_dict
 
-    def _stage_multistart_joint(self, soln_dict):
-        """Stage 2: Multi-start joint optimization of rotation + morphology."""
+    def _stage_omega_initialization(self, soln_dict):
+        """
+        Stage 1.5: Estimate ω per Gaussian using a model-fit grid search.
+
+        For each Gaussian, evaluates the linearised peak-attenuation model
+
+            g(t)^{-2} = c₀ + c₁·cos(ξ(t)) + c₂·sin(ξ(t))
+
+        where ξ(t) = 4π·ω·t − 2·φ_k(t), across a uniform grid of ω candidates
+        and returns the ω with the smallest OLS residual.  This works with
+        sparse data (fewer than one observation per oscillation cycle) because
+        it fits the physical model directly rather than trying to resolve
+        individual extrema.
+
+        Parameters
+        ----------
+        soln_dict : dict
+            Current solution dict (must contain x0s, v0s, a0s after Stage 1).
+
+        Returns
+        -------
+        dict
+            Updated soln_dict with 'omegas' replaced by extrema-timing estimates.
+        """
+        from ..estimation.omega import estimate_omega_from_model_fit
+
+        s0 = self.sources[0].cpu().numpy()
+
+        print(f"\n{'='*50}")
+        print("Stage 1.5: Model-fit ω initialization...")
+        print(f"{'='*50}")
+
+        omega_inits = []
+        for n in range(self.N):
+            t_n = np.array(self.peak_data.assigned_times[n], dtype=float)
+            g_n = np.array(self.peak_data.assigned_values[n], dtype=float)
+
+            if len(t_n) < 4:
+                mid = (self.omega_min + self.omega_max) / 2.0
+                print(f"  Gaussian {n}: too few observations ({len(t_n)}); "
+                      f"using midpoint ω={mid:.4f} Hz")
+                omega_inits.append(mid)
+                continue
+
+            # Viewing angle from estimated trajectory
+            x0_n = soln_dict['x0s'][n].detach().cpu().numpy()
+            v0_n = soln_dict['v0s'][n].detach().cpu().numpy()
+            a0_n = soln_dict['a0s'][n].detach().cpu().numpy()
+
+            sort_idx = np.argsort(t_n)
+            t_n, g_n = t_n[sort_idx], g_n[sort_idx]
+            mu_n  = (x0_n
+                     + v0_n * t_n[:, None]
+                     + 0.5 * a0_n * t_n[:, None] ** 2)
+            phi_n = np.arctan2(mu_n[:, 1] - s0[1], mu_n[:, 0] - s0[0])
+
+            omega_n = estimate_omega_from_model_fit(
+                t_n, g_n, phi_n,
+                self.omega_min, self.omega_max,
+            )
+            fallback = (self.omega_min + self.omega_max) / 2.0
+            src = "fallback (midpoint)" if abs(omega_n - fallback) < 1e-9 else "model-fit"
+            omega_inits.append(omega_n)
+            print(f"  Gaussian {n}: ω_init = {omega_n:.4f} Hz "
+                  f"[{src}]  ({len(t_n)} observations)")
+
+        soln_dict['omegas'] = [
+            torch.tensor([w], dtype=torch.float64, device=self.device)
+            for w in omega_inits
+        ]
+        print(f"{'='*50}")
+        return soln_dict
+
+    def _sup_projection_error(self, result_dict):
+        """
+        Compute the supremum projection error for a candidate solution.
+
+        Returns ``max_{t,r} |sim_proj(t,r) - obs_proj(t,r)|`` evaluated at
+        the observable time indices, using the current ``theta_fixed`` context.
+
+        Parameters
+        ----------
+        result_dict : dict
+            Parameter dictionary returned by :meth:`construct_soln_dict`.
+
+        Returns
+        -------
+        float
+            Supremum absolute projection error.
+        """
+        with torch.no_grad():
+            sim_projs = self.generate_projections(self.t_observable, result_dict)
+            sim_proc  = self.process_projections(sim_projs)
+            obs_proc  = self.proj_data[self.peak_data.observable_indices]
+            return torch.max(torch.abs(sim_proc - obs_proc)).item()
+
+    def _stage_multistart_joint(self, soln_dict, warm_start=False):
+        """Stage 2: Multi-start joint optimization of rotation + morphology.
+
+        Parameters
+        ----------
+        soln_dict : dict
+            Current solution (must contain omegas, alphas, U_skews, x0s,
+            v0s, a0s).
+        warm_start : bool, optional
+            If True the first trial uses the omegas already stored in
+            ``soln_dict`` (e.g. from model-fit initialization) instead of a
+            random draw.  Subsequent trials (if any) are still randomized.
+
+        Stopping behaviour
+        ------------------
+        * If ``self.omega_sup_threshold`` is set: trials continue until the
+          supremum projection error ``max_{t,r} |sim - obs|`` drops below the
+          threshold, up to a hard cap of ``self.omega_max_trials`` (defaults to
+          ``self.n_omega_inits`` when unset).  The best result found so far is
+          kept at each step, so the loop always returns something useful.
+        * Otherwise: runs exactly ``self.n_omega_inits`` trials (fixed-count
+          behaviour).
+        """
         print(f"\n{'='*50}")
         print("Starting multi-start joint optimization...")
         print(f"{'='*50}")
 
-        n_random_starts = self.n_omega_inits or 5
-        print(f"Running {n_random_starts} random omega initializations")
+        use_threshold = self.omega_sup_threshold is not None
+        n_fixed = self.n_omega_inits or 5
 
-        initial_alphas = [alpha.clone().detach() for alpha in soln_dict['alphas']]
+        if use_threshold:
+            cap = self.omega_max_trials or n_fixed
+            print(f"Threshold mode: sup error < {self.omega_sup_threshold:.3e}, "
+                  f"cap = {cap} trials")
+        else:
+            cap = n_fixed
+            print(f"Fixed mode: {cap} trials")
+
+        initial_alphas  = [a.clone().detach() for a in soln_dict['alphas']]
         initial_U_skews = [U.clone().detach() for U in soln_dict['U_skews']]
         omega_min = self.omega_min - 0.01
         omega_max = self.omega_max + 0.01
 
-        all_losses, all_results = [], []
+        all_losses, all_results, all_sup_errors = [], [], []
+        threshold_met = False
 
-        for trial_idx in range(n_random_starts):
-            initial_omegas = [
-                torch.tensor(
-                    [np.random.uniform(omega_min, omega_max)],
-                    dtype=torch.float64, device=self.device,
-                )
-                for _ in range(self.N)
-            ]
+        for trial_idx in range(cap):
+            if warm_start and trial_idx == 0:
+                initial_omegas = [
+                    omega.clone().detach() for omega in soln_dict['omegas']
+                ]
+            else:
+                initial_omegas = [
+                    torch.tensor(
+                        [np.random.uniform(omega_min, omega_max)],
+                        dtype=torch.float64, device=self.device,
+                    )
+                    for _ in range(self.N)
+                ]
 
             test_dict = {
-                'alphas': [alpha.clone().requires_grad_(True)
-                           for alpha in initial_alphas],
+                'alphas':  [a.clone().requires_grad_(True)
+                            for a in initial_alphas],
                 'U_skews': [U.clone().requires_grad_(True)
                             for U in initial_U_skews],
-                'omegas': [omega.requires_grad_(True)
-                           for omega in initial_omegas],
+                'omegas':  [omega.requires_grad_(True)
+                            for omega in initial_omegas],
                 'x0s': soln_dict['x0s'],
                 'v0s': soln_dict['v0s'],
                 'a0s': soln_dict['a0s'],
@@ -358,19 +504,35 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
                                     'disp': False},
             )
 
-            result_dict = self.construct_soln_dict(res)
-            final_loss = res.fun.item()
+            result_dict  = self.construct_soln_dict(res)
+            final_loss   = res.fun.item()
+            sup_err      = self._sup_projection_error(result_dict)
+
             all_losses.append(final_loss)
             all_results.append(result_dict)
+            all_sup_errors.append(sup_err)
 
             final_omegas = [omega.item() for omega in result_dict['omegas']]
-            print(f"  Trial {trial_idx + 1}/{n_random_starts}: "
-                  f"loss = {final_loss:.6e}, "
+            sup_str = f", sup err = {sup_err:.3e}" if use_threshold else ""
+            print(f"  Trial {trial_idx + 1}/{cap}: "
+                  f"loss = {final_loss:.6e}"
+                  f"{sup_str}, "
                   f"ω = {[f'{w:.3f}' for w in final_omegas]}")
 
-        best_trial_idx = np.argmin(all_losses)
-        best_result = all_results[best_trial_idx]
-        best_loss = all_losses[best_trial_idx]
+            if use_threshold and sup_err < self.omega_sup_threshold:
+                print(f"  ✓ Threshold met at trial {trial_idx + 1} "
+                      f"(sup err {sup_err:.3e} < {self.omega_sup_threshold:.3e})")
+                threshold_met = True
+                break
+
+        best_trial_idx = int(np.argmin(all_sup_errors))
+        best_result    = all_results[best_trial_idx]
+        best_loss      = all_losses[best_trial_idx]
+        best_sup_err   = all_sup_errors[best_trial_idx]
+
+        if use_threshold and not threshold_met:
+            print(f"\n  ⚠ Threshold not met after {cap} trials "
+                  f"(best sup err = {best_sup_err:.3e})")
 
         soln_dict['alphas'] = [
             alpha.clone().detach() for alpha in best_result['alphas']
@@ -384,16 +546,99 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
 
         print(f"\n{'='*50}")
         print(f"Multi-start complete! Best trial: {best_trial_idx + 1}")
+        print(f"Best sup error: {best_sup_err:.3e}")
         print(f"Best loss: {best_loss:.6e}")
         print(f"Best ω: "
               f"{[f'{omega.item():.4f}' for omega in soln_dict['omegas']]}")
         print(f"{'='*50}")
 
-        return soln_dict, best_loss
+        return soln_dict, best_sup_err
 
     # ==================================================================
     # Optimization helpers
     # ==================================================================
+
+    def _eval_joint_loss(self, soln_dict):
+        """Evaluate the joint projection loss at current parameters."""
+        self.theta_fixed = {
+            'x0s': [x0.clone() for x0 in soln_dict['x0s']],
+            'v0s': [v0.clone() for v0 in soln_dict['v0s']],
+            'a0s': [a0.clone() for a0 in soln_dict['a0s']],
+        }
+        test_dict = {
+            'alphas':  [a.clone().requires_grad_(False) for a in soln_dict['alphas']],
+            'U_skews': [U.clone().requires_grad_(False) for U in soln_dict['U_skews']],
+            'omegas':  [w.clone().requires_grad_(False) for w in soln_dict['omegas']],
+            'x0s': soln_dict['x0s'],
+            'v0s': soln_dict['v0s'],
+            'a0s': soln_dict['a0s'],
+        }
+        theta_tensor = self.map_from_dict_to_tensor(test_dict, mode='joint')
+        with torch.no_grad():
+            return self._loss_joint(theta_tensor).item()
+
+    def _optimize_morphology_only(self, soln_dict, max_iter=300):
+        """
+        Optimize morphology (alpha, U_skew) with omega and trajectories fixed.
+
+        Fixes ω at its current value and minimises the projection loss over
+        only the shape parameters (α, U_skew) using L-BFGS.  Because ω is
+        decoupled, the sub-problem is much better conditioned than the full
+        joint optimisation.
+
+        Parameters
+        ----------
+        soln_dict : dict
+            Current solution (must contain alphas, U_skews, omegas, x0s,
+            v0s, a0s).
+        max_iter : int
+            Maximum L-BFGS iterations.
+
+        Returns
+        -------
+        dict
+            Updated solution with refined alphas and U_skews; omegas unchanged.
+        """
+        print("\n  Optimizing morphology (α, U_skew) with ω fixed...")
+
+        self.theta_fixed = {
+            'x0s':    [x0.clone() for x0 in soln_dict['x0s']],
+            'v0s':    [v0.clone() for v0 in soln_dict['v0s']],
+            'a0s':    [a0.clone() for a0 in soln_dict['a0s']],
+            'omegas': [w.clone()  for w  in soln_dict['omegas']],
+        }
+        test_dict = {
+            'alphas':  [a.clone().requires_grad_(True) for a in soln_dict['alphas']],
+            'U_skews': [U.clone().requires_grad_(True) for U in soln_dict['U_skews']],
+            'x0s': soln_dict['x0s'],
+            'v0s': soln_dict['v0s'],
+            'a0s': soln_dict['a0s'],
+        }
+
+        theta_tensor = self.map_from_dict_to_tensor(test_dict, mode='joint')
+        print(f"  Optimizing {theta_tensor.numel()} morphology parameters "
+              f"(α + U_skew, ω fixed)...")
+
+        res = minimize(
+            self._loss_joint, x0=theta_tensor, method='l-bfgs',
+            tol=1e-8, options={'gtol': 1e-8, 'max_iter': max_iter,
+                               'disp': False},
+        )
+
+        result_dict = self.construct_soln_dict(res)
+        soln_dict['alphas'] = [
+            alpha.clone().detach() for alpha in result_dict['alphas']
+        ]
+        soln_dict['U_skews'] = [
+            U.clone().detach() for U in result_dict['U_skews']
+        ]
+        # omegas are unchanged
+
+        print(f"  Morphology optimization: loss = {res.fun.item():.6e} "
+              f"({res.nit} iterations)")
+        print(f"  ω (unchanged): "
+              f"{[f'{omega.item():.4f}' for omega in soln_dict['omegas']]}")
+        return soln_dict
 
     def _optimize_joint(self, soln_dict, max_iter=300):
         """
@@ -460,20 +705,20 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
 
         return soln_dict
 
-    def _fine_grid_search_omega(self, soln_dict, current_loss,
+    def _fine_grid_search_omega(self, soln_dict, current_sup_error,
                                 omega_range=3.0, omega_step=0.1):
         """
         Fine grid search around current omega estimate.
 
-        Evaluates projection loss on a grid ``±omega_range`` Hz with
-        ``omega_step`` spacing, keeping morphology (alpha, U_skew) fixed.
+        Evaluates the supremum projection error on a grid ``±omega_range`` Hz
+        with ``omega_step`` spacing, keeping morphology (alpha, U_skew) fixed.
 
         Parameters
         ----------
         soln_dict : dict
             Current solution.
-        current_loss : float
-            Current projection loss (baseline).
+        current_sup_error : float
+            Current supremum projection error (baseline).
         omega_range : float
             Half-width of search window (Hz).
         omega_step : float
@@ -493,7 +738,7 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
             'a0s': soln_dict['a0s'],
         }
 
-        best_loss = current_loss
+        best_sup_err = current_sup_error
         best_omegas = [omega.clone() for omega in soln_dict['omegas']]
 
         for k in range(self.N):
@@ -503,7 +748,7 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
             n_points = int((omega_hi - omega_lo) / omega_step) + 1
             omega_candidates = np.linspace(omega_lo, omega_hi, n_points)
 
-            losses = []
+            sup_errors = []
             for omega_test in omega_candidates:
                 test_dict = {
                     'alphas': [a.clone().requires_grad_(False)
@@ -519,24 +764,21 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
                 test_dict['omegas'][k] = torch.tensor(
                     [omega_test], dtype=torch.float64, device=self.device,
                 )
-                theta_tensor = self.map_from_dict_to_tensor(
-                    test_dict, mode='joint',
-                )
-                losses.append(self._loss_joint(theta_tensor).item())
+                sup_errors.append(self._sup_projection_error(test_dict))
 
-            min_idx = np.argmin(losses)
-            min_loss = losses[min_idx]
+            min_idx = np.argmin(sup_errors)
+            min_sup_err = sup_errors[min_idx]
             best_omega_k = omega_candidates[min_idx]
 
-            if min_loss < best_loss:
-                improvement = best_loss - min_loss
+            if min_sup_err < best_sup_err:
+                improvement = best_sup_err - min_sup_err
                 print(f"  Gaussian {k}: ω {omega_current:.4f} → "
                       f"{best_omega_k:.4f} Hz "
-                      f"(Δloss = {improvement:.6e})")
+                      f"(Δsup = {improvement:.6e})")
                 best_omegas[k] = torch.tensor(
                     [best_omega_k], dtype=torch.float64, device=self.device,
                 )
-                best_loss = min_loss
+                best_sup_err = min_sup_err
             else:
                 print(f"  Gaussian {k}: No improvement found "
                       f"(keeping ω = {omega_current:.4f} Hz)")
@@ -545,10 +787,10 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
             omega.clone().detach() for omega in best_omegas
         ]
 
-        if best_loss < current_loss:
-            improvement = current_loss - best_loss
-            print(f"\n  ✓ Grid search improved loss: {current_loss:.6e} → "
-                  f"{best_loss:.6e} (Δ = {improvement:.6e})")
+        if best_sup_err < current_sup_error:
+            improvement = current_sup_error - best_sup_err
+            print(f"\n  ✓ Grid search improved sup error: {current_sup_error:.6e} → "
+                  f"{best_sup_err:.6e} (Δ = {improvement:.6e})")
         else:
             print(f"\n  Grid search: No improvement found")
 
@@ -745,15 +987,23 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
                 ].reshape(-1)
                 row_parts.append(U_skew_vals)
 
-                # Omega (if not fixed)
+                # Omega (if not fixed) — sigmoid reparametrization
+                # Store z = logit((ω − ω_min) / (ω_max − ω_min)) so the
+                # unconstrained z ∈ ℝ maps to ω ∈ (ω_min, ω_max) always.
                 theta_fixed_keys = list(
                     getattr(self, 'theta_fixed', {}).keys()
                 )
                 if ('omegas' in theta_dict
                         and 'omegas' not in theta_fixed_keys):
-                    row_parts.append(
-                        theta_dict["omegas"][k].clone().reshape(-1)
+                    omega_k = theta_dict["omegas"][k].clone()
+                    omega_range = self.omega_max - self.omega_min
+                    # Clamp to open interval before logit to avoid ±inf
+                    p = torch.clamp(
+                        (omega_k - self.omega_min) / omega_range,
+                        min=1e-6, max=1.0 - 1e-6,
                     )
+                    z_omega = torch.log(p / (1.0 - p))  # logit
+                    row_parts.append(z_omega.reshape(-1))
 
                 tensor_rows.append(torch.cat(row_parts))
 
@@ -844,16 +1094,21 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
                     d, dtype=torch.bool, device=theta_tensor.device,
                 )
                 diag_clamped = torch.clamp(
-                    U_skew[diag_mask], min=-5, max=10,
+                    U_skew[diag_mask], min=-4, max=4,
                 )
                 U_skew_final = U_skew.clone()
                 U_skew_final[diag_mask] = torch.exp(diag_clamped)
                 U_skews.append(U_skew_final)
                 idx += n_U_params
 
-                # Omega (if present in tensor)
+                # Omega (if present in tensor) — inverse sigmoid to recover ω
                 if len(row_k) > idx:
-                    omega = row_k[idx]
+                    z_omega = row_k[idx]
+                    omega = (
+                        self.omega_min
+                        + (self.omega_max - self.omega_min)
+                        * torch.sigmoid(z_omega)
+                    )
                     omegas.append(
                         omega.unsqueeze(0) if omega.dim() == 0 else omega
                     )

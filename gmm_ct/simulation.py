@@ -132,10 +132,4 @@ def run_simulation(cfg: SimulateConfig) -> Path:
         title="Ground Truth Parameters",
     )
 
-    elapsed = wall_clock() - start
-    # print(f"\nSimulation complete in {elapsed:.1f}s")
-    # print(f"  Projections : {experiment_dir / 'projections.pt'}")
-    # print(f"  Ground truth: {experiment_dir / 'ground_truth.pt'}")
-    # print(f"  Parameters  : {experiment_dir / 'true_parameters.md'}")
-
     return experiment_dir

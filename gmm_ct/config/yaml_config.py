@@ -120,7 +120,16 @@ class ReconstructionSettings:
     n_trajectory_trials : int or None
         Multi-start trials for trajectory optimisation.
     n_omega_inits : int or None
-        Random omega initialisations for joint optimisation.
+        Random omega initialisations for joint optimisation (used as the
+        hard cap when ``omega_sup_threshold`` is set).
+    omega_sup_threshold : float or None
+        Stop the joint multi-start loop early when the supremum projection
+        error ``max_{t,r} |sim(t,r) − obs(t,r)|`` falls below this value.
+        If None (default), runs exactly ``n_omega_inits`` trials.
+    omega_max_trials : int or None
+        Hard upper bound on the number of trials when
+        ``omega_sup_threshold`` is active. Ignored otherwise.
+        Defaults to ``n_omega_inits`` when None.
     max_iterations : int
         Maximum L-BFGS iterations.
     tolerance : float
@@ -129,6 +138,8 @@ class ReconstructionSettings:
 
     n_trajectory_trials: Optional[int] = None
     n_omega_inits: Optional[int] = None
+    omega_sup_threshold: Optional[float] = None
+    omega_max_trials: Optional[int] = None
     max_iterations: int = 500
     tolerance: float = 1e-5
 
@@ -273,6 +284,8 @@ def _parse_reconstruction(raw: dict) -> ReconstructionSettings:
     return ReconstructionSettings(
         n_trajectory_trials=raw.get("n_trajectory_trials"),
         n_omega_inits=raw.get("n_omega_inits"),
+        omega_sup_threshold=raw.get("omega_sup_threshold"),
+        omega_max_trials=raw.get("omega_max_trials"),
         max_iterations=raw.get("max_iterations", 500),
         tolerance=raw.get("tolerance", 1e-5),
     )

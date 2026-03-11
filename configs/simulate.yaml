@@ -34,12 +34,11 @@ physics:
   accelerations:
     - [0.0, -9.81]                   # Gravity (broadcast to all Gaussians)
 
-  # omega_range: [-24.0, -16.0]       # Angular velocity search bounds [min, max] (Hz)
-  omega_range: [16.0, 24.0]       # Angular velocity search bounds [min, max] (Hz)
+  omega_range: [2.0, 6.0]       # Angular velocity search bounds [min, max] (Hz)
 
 # --- Simulation Settings -------------------------------------------------
 simulation:
-  seed: 40                           # Random seed for reproducibility
+  seed: 3                           # Random seed for reproducibility
   n_projections: 65                  # Number of time steps
   duration: 1.5                      # Time window (seconds)
   initial_velocity: [0.75, 0.5]     # Base initial velocity (perturbations added per Gaussian)

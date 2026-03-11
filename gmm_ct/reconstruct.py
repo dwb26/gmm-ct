@@ -105,8 +105,36 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
     print(f"Loaded projections: {proj_data.shape}")
     print(f"Time steps: {t.shape[0]}  ({t[0].item():.3f} – {t[-1].item():.3f}s)")
 
-    # --- Instantiate model from config ---
+    # --- Pre-load ground truth (needed for seed + diagnostic plots) ---
+    _data_dir_early = Path(cfg.data_path).parent
+    _gt_path_early = _data_dir_early / "ground_truth.pt"
+    _gt_early = None
+    _seed_str = "unknown"
+    if _gt_path_early.exists():
+        try:
+            _gt_early = torch.load(_gt_path_early, map_location=device,
+                                   weights_only=False)
+            _seed = _gt_early.get("config", {}).get("seed", None)
+            if _seed is not None:
+                _seed_str = str(_seed)
+        except Exception:
+            pass  # ground truth unavailable; fall back gracefully
+
+    # --- Output directory (created before fit so diagnostic plots land here) ---
+    N = cfg.n_gaussians
+    out_dir = Path(cfg.output.directory)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    experiment_dir = out_dir / f"{timestamp}_seed{_seed_str}_N{N}"
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Instantiate model, pointing its output_dir at the experiment dir ---
     model = GMM_reco.from_config(cfg)
+    model.output_dir = experiment_dir
+    if _gt_early is not None:
+        try:
+            model.theta_true = _gt_early["theta_true"]
+        except Exception:
+            pass
 
     # --- Run reconstruction ---
     # fit() expects proj_data in the list-of-tensors-per-source format
@@ -117,25 +145,7 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
     else:
         proj_data_input = proj_data
 
-    # --- Pre-load ground truth so diagnostic plots can show the true GMM ---
-    _data_dir_early = Path(cfg.data_path).parent
-    _gt_path_early = _data_dir_early / "ground_truth.pt"
-    if _gt_path_early.exists():
-        try:
-            _gt_early = torch.load(_gt_path_early, map_location=device,
-                                   weights_only=False)
-            model.theta_true = _gt_early["theta_true"]
-        except Exception:
-            pass  # ground truth unavailable; diagnostics fall back gracefully
-
     soln_dict = model.fit(proj_data_input, t)
-
-    # --- Output directory ---
-    N = cfg.n_gaussians
-    out_dir = Path(cfg.output.directory)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    experiment_dir = out_dir / f"{timestamp}_N{N}"
-    experiment_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Save estimated parameters (markdown) ---
     export_parameters(

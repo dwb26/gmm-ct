@@ -434,3 +434,199 @@ def plot_omega_estimation_diagnostics(peak_values, t, omega_true=None,
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"Diagnostic plot saved to: {output_path}")
     plt.close()
+
+
+def estimate_omega_from_extrema(t_n, g_n, phi_n, omega_min, omega_max,
+                                n_dense=1000, smoothing_factor=0.05):
+    """
+    Estimate angular velocity ω from a sparse peak-value time series using the
+    extrema-timing method with trajectory-drift correction.
+
+    The phase argument of the peak-attenuation model is
+
+        θ(t) = 4π·ω·t − 2·φ_k(t) + ψ
+
+    Between consecutive same-type extrema (max-max or min-min), Δθ = 2π, giving:
+
+        ω = (π + Δφ) / (2π · Δt)
+
+    Between adjacent extrema (max-min or min-max), Δθ = π, giving:
+
+        ω = (π + 2·Δφ) / (4π · Δt)
+
+    where Δφ = φ_k(t₂) − φ_k(t₁) corrects for trajectory-induced viewing-angle
+    drift between the two extremum times.
+
+    Because raw observations are sparse, a cubic smoothing spline is first fitted to
+    upsample to a dense grid; extrema are then found on the dense reconstruction.
+
+    Parameters
+    ----------
+    t_n : array-like, shape (n_pts,)
+        Observed times for this Gaussian's assigned peaks (sorted ascending).
+    g_n : array-like, shape (n_pts,)
+        Observed peak values at those times.
+    phi_n : array-like, shape (n_pts,)
+        Viewing angle φ_k(t) at each observed time, computed from the
+        trajectory as arctan2(μ_y(t) − s_y, μ_x(t) − s_x).
+    omega_min : float
+        Minimum plausible angular velocity (Hz).
+    omega_max : float
+        Maximum plausible angular velocity (Hz).
+    n_dense : int, optional
+        Number of points in the dense upsampled grid (default 1000).
+    smoothing_factor : float, optional
+        Controls spline smoothing: s = n_pts · (smoothing_factor · std(g))².
+        Larger values → smoother spline (default 0.05 = 5 % of signal std).
+
+    Returns
+    -------
+    float
+        Median trajectory-corrected ω estimate (Hz).  Falls back to the
+        midpoint of [omega_min, omega_max] if fewer than 2 adjacent extrema
+        are found.
+    """
+    from scipy.interpolate import UnivariateSpline
+    from scipy.signal import argrelextrema
+
+    t_n   = np.asarray(t_n,   dtype=float)
+    g_n   = np.asarray(g_n,   dtype=float)
+    phi_n = np.asarray(phi_n, dtype=float)
+
+    fallback = (omega_min + omega_max) / 2.0
+
+    if len(t_n) < 4:
+        return fallback
+
+    # Sort by time (assignment order is not guaranteed to be monotone)
+    sort_idx = np.argsort(t_n)
+    t_n, g_n, phi_n = t_n[sort_idx], g_n[sort_idx], phi_n[sort_idx]
+
+    # 1. Cubic interpolating spline (s=0): we need to retain the rapid
+    # oscillation, so no smoothing.  The data points are sparse relative to
+    # the oscillation period, meaning a smoothing spline would suppress the
+    # very signal we are trying to detect.
+    try:
+        spl = UnivariateSpline(t_n, g_n, k=3, s=0)
+    except Exception:
+        return fallback
+
+    # 2. Dense evaluation
+    t_dense   = np.linspace(t_n[0], t_n[-1], n_dense)
+    g_dense   = spl(t_dense)
+    phi_dense = np.interp(t_dense, t_n, phi_n)
+
+    # 3. Extremum-search window: ~30 % of a quarter-period in dense samples
+    T_obs      = t_n[-1] - t_n[0]
+    omega_mid  = (omega_min + omega_max) / 2.0
+    quarter_per = T_obs / (4.0 * omega_mid)
+    dt_dense   = T_obs / n_dense
+    order = max(3, int(0.3 * quarter_per / dt_dense))
+
+    max_d = argrelextrema(g_dense, np.greater, order=order)[0]
+    min_d = argrelextrema(g_dense, np.less,    order=order)[0]
+
+    all_d    = np.sort(np.concatenate([max_d, min_d]))
+    is_max_d = np.isin(all_d, max_d)
+
+    if len(all_d) < 2:
+        return fallback
+
+    # 4. Per-pair trajectory-corrected estimates
+    omega_estimates = []
+    for ki in range(len(all_d) - 1):
+        i1, i2 = all_d[ki], all_d[ki + 1]
+        dt_p   = t_dense[i2] - t_dense[i1]
+        dphi_p = phi_dense[i2] - phi_dense[i1]
+
+        if is_max_d[ki] == is_max_d[ki + 1]:       # same-type:  Δθ = 2π
+            oc = (np.pi + dphi_p)       / (2.0 * np.pi * dt_p)
+        else:                                        # adjacent:   Δθ = π
+            oc = (np.pi + 2.0 * dphi_p) / (4.0 * np.pi * dt_p)
+
+        # Only keep estimates within the plausible range (outlier rejection)
+        if omega_min <= oc <= omega_max:
+            omega_estimates.append(oc)
+
+    if len(omega_estimates) == 0:
+        return fallback
+
+    return float(np.median(omega_estimates))
+
+
+def estimate_omega_from_model_fit(t_n, g_n, phi_n, omega_min, omega_max,
+                                  n_grid=400):
+    """
+    Estimate ω by fitting the peak-attenuation model to sparse data via grid
+    search.
+
+    For each candidate ω on a uniform grid over [omega_min, omega_max], fits
+    the linearised 3-parameter model
+
+        g(t)^{-2} = c₀ + c₁·cos(ξ(t)) + c₂·sin(ξ(t))
+
+    where ξ(t) = 4π·ω·t − 2·φ_k(t), via ordinary least squares.  The ω that
+    minimises the OLS residual is returned.
+
+    This approach does **not** require resolving individual oscillation cycles,
+    making it suitable for sparse data with fewer than one observation per
+    period.
+
+    Parameters
+    ----------
+    t_n : array-like, shape (n_pts,)
+        Observed times for this Gaussian's assigned peaks (sorted ascending).
+    g_n : array-like, shape (n_pts,)
+        Observed peak projection values at those times.
+    phi_n : array-like, shape (n_pts,)
+        Viewing angle φ_k(t) at each observation time.
+    omega_min, omega_max : float
+        Search bounds (Hz).
+    n_grid : int, optional
+        Number of candidate ω values on the uniform grid (default 400).
+
+    Returns
+    -------
+    float
+        Estimated ω (Hz).  Falls back to the midpoint of [omega_min, omega_max]
+        if the grid search produces no valid fits.
+    """
+    t_n   = np.asarray(t_n,   dtype=float)
+    g_n   = np.asarray(g_n,   dtype=float)
+    phi_n = np.asarray(phi_n, dtype=float)
+
+    fallback = (omega_min + omega_max) / 2.0
+
+    if len(t_n) < 4:
+        return fallback
+
+    sort_idx = np.argsort(t_n)
+    t_n, g_n, phi_n = t_n[sort_idx], g_n[sort_idx], phi_n[sort_idx]
+
+    # Linearise: 1/g² = c₀ + c₁·cos(ξ) + c₂·sin(ξ)
+    # This is exact given the physical model g = A / sqrt(1 + E·cos(ξ + ψ)).
+    y    = 1.0 / np.maximum(g_n ** 2, 1e-30)
+    ones = np.ones(len(t_n))
+
+    omega_grid = np.linspace(omega_min, omega_max, n_grid)
+    residuals  = np.full(n_grid, np.inf)
+
+    for i, omega_test in enumerate(omega_grid):
+        xi = 4.0 * np.pi * omega_test * t_n - 2.0 * phi_n
+        X  = np.column_stack([ones, np.cos(xi), np.sin(xi)])
+        c, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+
+        # Validity: c₀ > 0 (real amplitude) and E < 1 (model well-defined)
+        if c[0] <= 0:
+            continue
+        E = np.sqrt(c[1] ** 2 + c[2] ** 2) / c[0]
+        if E >= 1.0:
+            continue
+
+        residuals[i] = np.sum((X @ c - y) ** 2)
+
+    best_i = int(np.argmin(residuals))
+    if np.isinf(residuals[best_i]):
+        return fallback
+
+    return float(omega_grid[best_i])

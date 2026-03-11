@@ -754,11 +754,239 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     return fig
 
 
+def animate_gmm_with_joint_projection(
+        sources, receivers, theta_true, theta_est,
+        t, K, d,
+        proj_obs=None,
+        filename=None, fps=10,
+        show_trajectories=True,
+        title='',
+        title_fontsize=20, label_fontsize=18, tick_fontsize=16,
+        upsample=1):
+    """
+    Animate true GMM (left), combined projections (centre), reconstructed GMM (right).
+
+    Unlike animate_temporal_gmm_comparison, the centre panel shows the **joint**
+    combined projections (all components together) rather than individual-component
+    projections. This is the most physically natural comparison, since the observer
+    only ever sees the combined signal.
+
+    Parameters
+    ----------
+    sources, receivers : geometry tensors
+    theta_true : dict  – ground-truth parameter dictionary
+    theta_est  : dict  – reconstructed parameter dictionary
+    t          : torch.Tensor – time vector
+    K          : int – number of Gaussians
+    d          : int – dimensionality (must be 2)
+    proj_obs   : torch.Tensor, shape (n_t, n_r), optional
+        Pre-computed observed (true combined) projection.  If *None* it is
+        re-computed from theta_true via the forward model.
+    filename   : str, optional – output path (.gif or .mp4)
+    fps        : int – frames per second of the saved file / display
+    show_trajectories : bool – overlay trajectory curves (default True)
+    title      : str – overall figure title
+    upsample   : int – integer upsampling factor for the animation time grid
+        (default 8).  The GMM shapes are re-evaluated analytically at
+        ``len(t) * upsample`` evenly-spaced time points covering the same
+        physical interval, eliminating the stroboscopic aliasing that makes
+        fast-rotating Gaussians appear frozen.  Projection curves fall back to
+        nearest-neighbour on the original data grid.
+
+    Returns
+    -------
+    anim : matplotlib FuncAnimation
+    """
+    from matplotlib.animation import FuncAnimation
+    from ..core.reconstruction import GMM_reco
+    import numpy as np
+
+    if d != 2:
+        raise NotImplementedError("animate_gmm_with_joint_projection only supports 2D")
+
+    # Reorder estimated parameters to align colour coding with ground truth
+    theta_est_r, _ = reorder_theta_to_match_true(theta_true, theta_est, K)
+
+    device = theta_true['x0s'][0].device
+
+    # Build forward models with omega_min/max wide enough to cover any value
+    omega_vals_true = [w.abs().item() for w in theta_true['omegas']]
+    omega_vals_est  = [w.abs().item() for w in theta_est_r['omegas']]
+    omega_bound = max(max(omega_vals_true), max(omega_vals_est), 1.0) + 5.0
+
+    GMM_true_obj = GMM_reco(d, K, sources, receivers,
+                            theta_true['x0s'], theta_true['a0s'],
+                            omega_min=0.0, omega_max=omega_bound, device=device)
+    GMM_est_obj  = GMM_reco(d, K, sources, receivers,
+                            theta_est_r['x0s'], theta_est_r['a0s'],
+                            omega_min=0.0, omega_max=omega_bound, device=device)
+
+    # Joint (combined) projections: process_projections sums all components
+    if proj_obs is None:
+        _p_true = GMM_true_obj.generate_projections(t, theta_true)
+        proj_obs = GMM_true_obj.process_projections(_p_true).detach().cpu().numpy()
+    else:
+        if hasattr(proj_obs, 'detach'):
+            proj_obs = proj_obs.detach().cpu().numpy()
+
+    _p_est    = GMM_est_obj.generate_projections(t, theta_est_r)
+    proj_est_np = GMM_est_obj.process_projections(_p_est).detach().cpu().numpy()
+
+    receiver_heights = np.array([rcvr[1].item() for rcvr in receivers[0]])
+    sorted_idx       = np.argsort(receiver_heights)
+    sorted_heights   = receiver_heights[sorted_idx]
+
+    # Global projection x-limits
+    proj_min = min(proj_obs.min(), proj_est_np.min())
+    proj_max = max(proj_obs.max(), proj_est_np.max())
+    proj_margin = (proj_max - proj_min) * 0.05
+
+    # Spatial bounds
+    source_x   = sources[0][0].item()
+    receiver_x = receivers[0][0][0].item()
+    x_margin   = 0.5
+    rcvr_h_arr = np.array([rcvr[1].item() for rcvr in receivers[0]])
+    y_min = rcvr_h_arr.min() - 0.1
+    y_max = rcvr_h_arr.max() + 0.1
+
+    colors = plt.cm.rainbow(np.linspace(0, 1, K))
+
+    # Figure
+    fig = plt.figure(figsize=(18, 6), dpi=DPI)
+    gs  = GridSpec(1, 3, figure=fig, hspace=0.15, wspace=0.12,
+                   width_ratios=[1.2, 0.8, 1.2], top=0.90, bottom=0.12)
+
+    ax_left   = fig.add_subplot(gs[0, 0])
+    ax_center = fig.add_subplot(gs[0, 1])
+    ax_right  = fig.add_subplot(gs[0, 2])
+
+    # ── Left panel ──────────────────────────────────────────────────────────
+    ax_left.set_xlim(source_x - x_margin, receiver_x + x_margin)
+    ax_left.set_ylim(y_min, y_max)
+    ax_left.set_xlabel('Depth (m)', fontweight='bold', fontsize=label_fontsize)
+    ax_left.set_ylabel('Height (m)', fontweight='bold', fontsize=label_fontsize)
+    ax_left.tick_params(axis='both', which='major', labelsize=tick_fontsize)
+    ax_left.grid(True, alpha=0.3, linestyle='--')
+    ax_left.set_facecolor('#f8f9fa')
+    ax_left.set_title('Ground Truth', fontweight='bold', fontsize=title_fontsize, pad=12)
+
+    from matplotlib.patches import Patch
+    legend_elements = [Patch(facecolor=colors[k], edgecolor='black',
+                             label=f'$\\rho_{{{k+1}}}$') for k in range(K)]
+    ax_left.legend(handles=legend_elements, loc='upper left',
+                   fontsize=14, framealpha=0.9, ncol=1)
+
+    # ── Centre panel ────────────────────────────────────────────────────────
+    ax_center.set_xlim(proj_min - proj_margin, proj_max + proj_margin)
+    ax_center.set_ylim(y_min, y_max)
+    ax_center.set_xlabel('Attenuation', fontweight='bold', fontsize=label_fontsize)
+    ax_center.tick_params(axis='x', which='major', labelsize=tick_fontsize)
+    ax_center.tick_params(axis='y', labelleft=False)
+    ax_center.grid(True, alpha=0.3, linestyle='--')
+    ax_center.set_facecolor('#ffffff')
+    ax_center.set_title('Joint Projections', fontweight='bold',
+                         fontsize=title_fontsize, pad=12)
+    # Static legend
+    from matplotlib.lines import Line2D
+    ax_center.legend(handles=[
+        Line2D([0], [0], color='black',  lw=2.5, label='Observed'),
+        Line2D([0], [0], color='red', lw=2.5, ls='--', label='Reconstructed'),
+    ], fontsize=12, loc='upper right', framealpha=0.9)
+
+    # ── Right panel (mirrored x) ─────────────────────────────────────────────
+    ax_right.set_xlim(-receiver_x - x_margin, -source_x + x_margin)
+    ax_right.set_ylim(y_min, y_max)
+    ax_right.set_xlabel('Depth (m)', fontweight='bold', fontsize=label_fontsize)
+    ax_right.tick_params(axis='x', which='major', labelsize=tick_fontsize)
+    ax_right.tick_params(axis='y', labelleft=False)
+    ax_right.grid(True, alpha=0.3, linestyle='--')
+    ax_right.set_facecolor('#f8f9fa')
+    ax_right.set_title('Reconstruction', fontweight='bold',
+                        fontsize=title_fontsize, pad=12)
+    xticks = ax_right.get_xticks()
+    ax_right.set_xticks(xticks)
+    ax_right.set_xticklabels([f'{int(-x)}' for x in xticks])
+
+    # Static: trajectories + acquisition geometry
+    if show_trajectories:
+        plot_trajectories_single(ax_left,  theta_true,  t, K, colors, mirror=False)
+        plot_trajectories_single(ax_right, theta_est_r, t, K, colors, mirror=True)
+    plot_acquisition_geometry(ax_left,  sources, receivers, d, mirror=False)
+    plot_acquisition_geometry(ax_right, sources, receivers, d, mirror=True)
+
+    fig.suptitle(title, fontsize=title_fontsize, fontweight='bold', y=0.98)
+
+    # ── Upsampled time grid ────────────────────────────────────────────────
+    # Re-evaluate GMM shapes analytically at `upsample` times more frames than
+    # the original data.  This removes stroboscopic aliasing for fast-rotating
+    # Gaussians (ω × Δt ≈ 0.5 causes π-symmetric ellipses to appear frozen when
+    # shown at the raw data rate).
+    upsample = max(1, int(upsample))
+    t_np     = t.detach().cpu().numpy()           # original data times
+    t_start, t_end = t_np[0], t_np[-1]
+    n_frames = len(t) * upsample
+    t_anim   = np.linspace(t_start, t_end, n_frames)  # finer grid
+
+    left_artists, center_artists, right_artists = [], [], []
+
+    def init():
+        ax_left.set_title(f'Ground Truth  (t = {t_start:.3f} s)',
+                          fontweight='bold', fontsize=title_fontsize, pad=12)
+        ax_right.set_title(f'Reconstruction  (t = {t_start:.3f} s)',
+                           fontweight='bold', fontsize=title_fontsize, pad=12)
+        return []
+
+    def update(frame):
+        for a in left_artists + center_artists + right_artists:
+            a.remove()
+        left_artists.clear(); center_artists.clear(); right_artists.clear()
+
+        t_val    = t_anim[frame]
+        # Nearest original data index for the projection panel
+        data_idx = int(np.argmin(np.abs(t_np - t_val)))
+
+        ax_left.set_title(f'Ground Truth  (t = {t_val:.3f} s)',
+                          fontweight='bold', fontsize=title_fontsize, pad=12)
+        ax_right.set_title(f'Reconstruction  (t = {t_val:.3f} s)',
+                           fontweight='bold', fontsize=title_fontsize, pad=12)
+
+        plot_gmm_snapshot_animated(ax_left,  theta_true,  t_val, K, d, colors,
+                                   left_artists,  is_true=True,  mirror=False)
+        plot_gmm_snapshot_animated(ax_right, theta_est_r, t_val, K, d, colors,
+                                   right_artists, is_true=False, mirror=True)
+
+        # Joint projections at the nearest data frame
+        sp_obs = proj_obs[data_idx][sorted_idx]
+        sp_est = proj_est_np[data_idx][sorted_idx]
+
+        l1, = ax_center.plot(sp_obs, sorted_heights,
+                              '-',  color='black', lw=2.5, alpha=0.85)
+        l2, = ax_center.plot(sp_est, sorted_heights,
+                              '--', color='red',   lw=2.5, alpha=0.85)
+        center_artists.extend([l1, l2])
+
+        return left_artists + center_artists + right_artists
+
+    # interval: keep real-time 1:1 with physics time
+    interval_ms = (t_end - t_start) * 1000 / n_frames
+    anim = FuncAnimation(fig, update, init_func=init, frames=n_frames,
+                         interval=interval_ms, blit=False, repeat=True)
+
+    if filename:
+        fps_save = n_frames / (t_end - t_start)
+        print(f"Saving animation to {filename}...")
+        anim.save(filename, writer='ffmpeg', fps=fps_save, dpi=DPI // 2)
+        print(f"\u2713 Animation saved: {filename}")
+
+    return anim
+
+
 def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est, 
                                      t, K, d, filename=None, fps=10,
                                      show_trajectories=True,
                                      title='', 
-                                     title_fontsize=20, label_fontsize=18, tick_fontsize=16):
+                                     title_fontsize=20, label_fontsize=18, tick_fontsize=16,
+                                     upsample=8):
     """
     Create an animation showing temporal evolution of ground truth and estimated GMMs.
     
@@ -773,8 +1001,12 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     - K: Number of Gaussians
     - d: Dimensionality (must be 2)
     - filename: Output filename (should end with .mp4 or .gif)
-    - fps: Frames per second (default: 10)
+    - fps: Frames per second of the saved file
     - show_trajectories: Whether to show trajectory paths (default: True)
+    - upsample: Integer upsampling factor for the animation time grid (default 8).
+        GMM shapes are re-evaluated at ``len(t) * upsample`` finer time points to
+        eliminate stroboscopic aliasing for fast-rotating Gaussians.  Projection
+        curves use nearest-neighbour interpolation on the original data grid.
     
     Returns:
     - anim: Matplotlib animation object
@@ -891,11 +1123,19 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     
     fig.suptitle(title, fontsize=title_fontsize, fontweight='bold', y=0.98)
 
+    # ── Upsampled time grid ────────────────────────────────────────────────
+    # Re-evaluate GMM shapes at a finer time grid to eliminate stroboscopic
+    # aliasing (fast-rotating Gaussians appear frozen when ω × Δt ≈ 0.5).
+    upsample = max(1, int(upsample))
+    t_np     = t.detach().cpu().numpy()
+    t_start, t_end = float(t_np[0]), float(t_np[-1])
+    n_frames = len(t) * upsample
+    t_anim   = np.linspace(t_start, t_end, n_frames)
+
     def init():
-        t0 = t[0].item()
-        ax_left.set_title(f'Ground Truth  (t = {t0:.3f} s)',
+        ax_left.set_title(f'Ground Truth  (t = {t_start:.3f} s)',
                           fontweight='bold', fontsize=title_fontsize, pad=12)
-        ax_right.set_title(f'Reconstruction  (t = {t0:.3f} s)',
+        ax_right.set_title(f'Reconstruction  (t = {t_start:.3f} s)',
                            fontweight='bold', fontsize=title_fontsize, pad=12)
         return []
     
@@ -907,7 +1147,10 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         center_artists.clear()
         right_artists.clear()
         
-        t_val = t[frame].item()
+        t_val    = t_anim[frame]
+        # Nearest original data index for the projection panel
+        data_idx = int(np.argmin(np.abs(t_np - t_val)))
+
         ax_left.set_title(f'Ground Truth  (t = {t_val:.3f} s)',
                           fontweight='bold', fontsize=title_fontsize, pad=12)
         ax_right.set_title(f'Reconstruction  (t = {t_val:.3f} s)',
@@ -919,9 +1162,9 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         plot_gmm_snapshot_animated(ax_right, theta_est_reordered, t_val, K, d, colors,
                                    right_artists, is_true=False, mirror=True)
         
-        # Plot projections at current time
-        proj_true_t = proj_true[0][frame].detach().cpu().numpy()
-        proj_est_t = proj_est[0][frame].detach().cpu().numpy()
+        # Plot projections at the nearest data frame
+        proj_true_t = proj_true[0][data_idx].detach().cpu().numpy()
+        proj_est_t = proj_est[0][data_idx].detach().cpu().numpy()
         
         sorted_indices = np.argsort(receiver_heights)
         sorted_heights = receiver_heights[sorted_indices]
@@ -942,14 +1185,16 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         
         return left_artists + center_artists + right_artists
     
-    # Create animation (blit=False to ensure suptitle is updated)
-    anim = FuncAnimation(fig, update, init_func=init, frames=len(t),
-                        interval=1000/fps, blit=False, repeat=True)
+    # interval: real-time 1:1 mapping with physics time
+    interval_ms = (t_end - t_start) * 1000 / n_frames
+    anim = FuncAnimation(fig, update, init_func=init, frames=n_frames,
+                        interval=interval_ms, blit=False, repeat=True)
     
     # Save animation
     if filename:
+        fps_save = n_frames / (t_end - t_start)
         print(f"Saving animation to {filename}...")
-        anim.save(filename, writer='ffmpeg', fps=fps, dpi=DPI//2)
+        anim.save(filename, writer='ffmpeg', fps=fps_save, dpi=DPI//2)
         print(f"✓ Animation saved: {filename}")
     
     return anim
