@@ -28,6 +28,8 @@ from time import time as wall_clock
 import numpy as np
 import torch
 
+from gmm_ct.visualization.publication import plot_projection_modes, plot_projection_modes, plot_sinogram
+
 from .config.yaml_config import AnalysisConfig, ReconstructConfig
 from .core.reconstruction import GMM_reco
 from .utils.helpers import export_parameters
@@ -368,6 +370,14 @@ def analyse_results(
             time_indices=time_indices,
             filename=experiment_dir / "temporal_gmm_comparison.pdf",
         )
+        
+        proj_2d = proj_data[0] if isinstance(proj_data, (list, tuple)) else proj_data
+        plot_sinogram(proj_2d, t, receivers, title="Observed Sinogram",
+                      filename=experiment_dir / "observed_sinogram.pdf")
+        
+        plot_projection_modes(proj_2d, t, receivers,
+                              title="Projection Modes",
+                              filename=experiment_dir / "projection_modes.pdf")
 
     # --- Animation ---
     if not analysis_cfg.skip_animations:

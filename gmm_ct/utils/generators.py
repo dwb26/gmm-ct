@@ -6,9 +6,10 @@ for testing and validation of the GMM reconstruction algorithm.
 """
 
 import math
+import warnings
 import torch
 
-def generate_true_param(d, K, initial_location, initial_velocity, initial_acceleration, min_rot, max_rot, device=None, sampling_dt=None):
+def generate_true_param(d, K, initial_location, initial_velocity, initial_acceleration, min_rot, max_rot, device=None, sampling_dt=None, min_velocity_separation=0.5):
     """
     Generate synthetic "true" parameters for GMM reconstruction testing.
     
@@ -39,6 +40,16 @@ def generate_true_param(d, K, initial_location, initial_velocity, initial_accele
         aliasing condition for 2-D ellipses (π-symmetry): any ω
         for which ``|2πωΔt mod π| < ε`` would make the Gaussian
         appear non-rotating and is therefore rejected and re-sampled.
+    min_velocity_separation : float, optional
+        Minimum Euclidean distance between any two initial velocity vectors
+        (in world-space units per second).  Since all Gaussians share the
+        same initial position and acceleration, the separation between
+        trajectories k and l grows as ``‖v0_k − v0_l‖ · t``, so this
+        threshold directly controls the minimum trajectory divergence rate.
+        Velocities are sampled via accept/reject: the first component is
+        drawn freely; each subsequent candidate is accepted only when its
+        distance to every already-accepted velocity exceeds this threshold.
+        Default: 0.5.
         
     Returns
     -------
@@ -123,15 +134,42 @@ def generate_true_param(d, K, initial_location, initial_velocity, initial_accele
     # Initial locations (assumed known for all Gaussians)
     x0s = [initial_location.to(torch.float64) for _ in range(K)]
 
-    # Initial velocities - Simple uniform distribution with increased vertical diversity
+    # Initial velocities — accept/reject to enforce minimum pairwise separation.
+    # Since all Gaussians share x0 and a0, trajectory separation grows as
+    # ‖v0_k − v0_l‖ · t, so enforcing a minimum velocity gap guarantees
+    # trajectories diverge at a physically realistic rate.
+    def _sample_velocity():
+        v_h = initial_velocity[0] + torch.rand(1, dtype=torch.float64, device=device).item() * 1.5
+        v_v = (torch.rand(1, dtype=torch.float64, device=device).item() - 0.5) * 4.5
+        return torch.tensor([v_h, v_v], dtype=torch.float64, device=device)
+
+    _max_attempts = 500
     v0s = []
-    for _ in range(K):
-        # Horizontal component: uniformly distributed, always positive
-        v_horizontal = initial_velocity[0] + torch.rand(1, dtype=torch.float64, device=device).item() * 1.5
+    for k in range(K):
+        if k == 0:
+            # First velocity: accept freely
+            v0s.append(_sample_velocity())
+            continue
+        for attempt in range(_max_attempts):
+            candidate = _sample_velocity()
+            if all(
+                torch.norm(candidate - accepted).item() >= min_velocity_separation
+                for accepted in v0s
+            ):
+                v0s.append(candidate)
+                break
+        else:
+            warnings.warn(
+                f"Could not find a velocity for component {k} satisfying "
+                f"min_velocity_separation={min_velocity_separation} after "
+                f"{_max_attempts} attempts. Accepting last candidate anyway. "
+                "Consider reducing min_velocity_separation or the number of components.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            v0s.append(candidate)
         
-        # Vertical component: uniformly distributed over wider range for more diversity
-        v_vertical = (torch.rand(1, dtype=torch.float64, device=device).item() - 0.5) * 4.5
-        v0s.append(torch.tensor([v_horizontal, v_vertical], dtype=torch.float64, device=device))
+    
     
     # Initial acceleration (assumed known for all Gaussians)
     a0s = [initial_acceleration.to(torch.float64) for _ in range(K)]

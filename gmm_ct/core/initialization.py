@@ -102,7 +102,6 @@ class InitializationMixin:
 
         self.peak_data.finalize_detections()
         self._create_legacy_aliases()
-        # self.peak_data.summary()
 
         return self._create_random_initial_velocities()
 

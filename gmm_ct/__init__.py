@@ -28,6 +28,8 @@ from .visualization.publication import (
     plot_parameter_recovery,
     plot_error_analysis,
     plot_sinogram_comparison,
+    plot_sinogram,
+    plot_projection_modes,
     plot_trajectory_comparison,
     create_publication_figure,
 )
@@ -70,6 +72,8 @@ __all__ = [
     'plot_parameter_recovery',
     'plot_error_analysis',
     'plot_sinogram_comparison',
+    'plot_sinogram',
+    'plot_projection_modes',
     'plot_trajectory_comparison',
     'create_publication_figure',
 ]

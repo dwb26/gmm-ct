@@ -13,7 +13,7 @@ from X-ray CT projection data:
 import torch
 import torch.nn as nn
 from torchmin import minimize
-from scipy.optimize import linear_sum_assignment
+from scipy.optimize import linear_sum_assignment, nnls
 from pathlib import Path
 import numpy as np
 
@@ -216,6 +216,9 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
         # Stage 1.5: ω initialization via model-fit grid search
         soln_dict = self._stage_omega_initialization(soln_dict)
 
+        # Stage 1.5b: α initialization via non-negative least squares
+        soln_dict = self._stage_alpha_initialization(soln_dict)
+
         # Stage 2: Multi-start joint optimization (ω + morphology)
         soln_dict, best_sup_err = self._stage_multistart_joint(soln_dict, warm_start=True)
 
@@ -393,6 +396,81 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
             torch.tensor([w], dtype=torch.float64, device=self.device)
             for w in omega_inits
         ]
+        print(f"{'='*50}")
+        return soln_dict
+
+    def _stage_alpha_initialization(self, soln_dict):
+        """
+        Stage 1.5b: Initialise attenuation coefficients via non-negative
+        least squares (NNLS).
+
+        With trajectories, shapes, and ω fixed from Stages 1 and 1.5, the
+        forward model is linear in {α_k}:
+
+            p_obs(t_i, r_j) ≈ Σ_k  α_k · φ_k(t_i, r_j)
+
+        where φ_k is the unit-α projection of Gaussian k.  The optimal
+        attenuation vector is therefore the solution to:
+
+            min_{α ≥ 0}  ‖Φ α − p_obs‖₂²
+
+        which is solved in closed form by SciPy's NNLS routine.  This
+        replaces the random initialisation in [10, 15] with an estimate
+        that is consistent with the observed data given the current shapes
+        and trajectories.
+
+        Parameters
+        ----------
+        soln_dict : dict
+            Current solution dict with v0s, x0s, a0s, omegas, U_skews
+            already set (output of Stage 1.5).
+
+        Returns
+        -------
+        dict
+            Updated soln_dict with 'alphas' replaced by NNLS estimates.
+        """
+        print(f"\n{'='*50}")
+        print("Stage 1.5b: NNLS alpha initialisation...")
+        print(f"{'='*50}")
+
+        t_obs = self.t[self.peak_data.observable_indices]
+        p_obs = self.proj_data[self.peak_data.observable_indices]   # (T_obs, R)
+        T_obs, R = p_obs.shape
+
+        # Build basis matrix Phi[:, k] = unit-alpha projection of Gaussian k
+        Phi = torch.zeros(
+            T_obs * R, self.N, dtype=torch.float64, device=self.device
+        )
+        with torch.no_grad():
+            for k in range(self.N):
+                unit_dict = {
+                    'alphas': [
+                        torch.ones(1, dtype=torch.float64, device=self.device)
+                        if kk == k
+                        else torch.zeros(1, dtype=torch.float64, device=self.device)
+                        for kk in range(self.N)
+                    ],
+                    'U_skews': soln_dict['U_skews'],
+                    'omegas':  soln_dict['omegas'],
+                    'x0s':     soln_dict['x0s'],
+                    'v0s':     soln_dict['v0s'],
+                    'a0s':     soln_dict['a0s'],
+                }
+                proj_k = self.generate_projections(t_obs, unit_dict)
+                Phi[:, k] = self.process_projections(proj_k).reshape(-1)
+
+        Phi_np  = Phi.cpu().numpy()
+        p_vec   = p_obs.reshape(-1).cpu().numpy()
+        alpha_hat, residual = nnls(Phi_np, p_vec)
+
+        soln_dict['alphas'] = [
+            torch.tensor([alpha_hat[k]], dtype=torch.float64, device=self.device)
+            for k in range(self.N)
+        ]
+
+        print(f"  α = {[f'{alpha_hat[k]:.3f}' for k in range(self.N)]}")
+        print(f"  NNLS residual ‖Φα − p_obs‖₂ = {residual:.4e}")
         print(f"{'='*50}")
         return soln_dict
 
@@ -577,68 +655,6 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
         with torch.no_grad():
             return self._loss_joint(theta_tensor).item()
 
-    def _optimize_morphology_only(self, soln_dict, max_iter=300):
-        """
-        Optimize morphology (alpha, U_skew) with omega and trajectories fixed.
-
-        Fixes ω at its current value and minimises the projection loss over
-        only the shape parameters (α, U_skew) using L-BFGS.  Because ω is
-        decoupled, the sub-problem is much better conditioned than the full
-        joint optimisation.
-
-        Parameters
-        ----------
-        soln_dict : dict
-            Current solution (must contain alphas, U_skews, omegas, x0s,
-            v0s, a0s).
-        max_iter : int
-            Maximum L-BFGS iterations.
-
-        Returns
-        -------
-        dict
-            Updated solution with refined alphas and U_skews; omegas unchanged.
-        """
-        print("\n  Optimizing morphology (α, U_skew) with ω fixed...")
-
-        self.theta_fixed = {
-            'x0s':    [x0.clone() for x0 in soln_dict['x0s']],
-            'v0s':    [v0.clone() for v0 in soln_dict['v0s']],
-            'a0s':    [a0.clone() for a0 in soln_dict['a0s']],
-            'omegas': [w.clone()  for w  in soln_dict['omegas']],
-        }
-        test_dict = {
-            'alphas':  [a.clone().requires_grad_(True) for a in soln_dict['alphas']],
-            'U_skews': [U.clone().requires_grad_(True) for U in soln_dict['U_skews']],
-            'x0s': soln_dict['x0s'],
-            'v0s': soln_dict['v0s'],
-            'a0s': soln_dict['a0s'],
-        }
-
-        theta_tensor = self.map_from_dict_to_tensor(test_dict, mode='joint')
-        print(f"  Optimizing {theta_tensor.numel()} morphology parameters "
-              f"(α + U_skew, ω fixed)...")
-
-        res = minimize(
-            self._loss_joint, x0=theta_tensor, method='l-bfgs',
-            tol=1e-8, options={'gtol': 1e-8, 'max_iter': max_iter,
-                               'disp': False},
-        )
-
-        result_dict = self.construct_soln_dict(res)
-        soln_dict['alphas'] = [
-            alpha.clone().detach() for alpha in result_dict['alphas']
-        ]
-        soln_dict['U_skews'] = [
-            U.clone().detach() for U in result_dict['U_skews']
-        ]
-        # omegas are unchanged
-
-        print(f"  Morphology optimization: loss = {res.fun.item():.6e} "
-              f"({res.nit} iterations)")
-        print(f"  ω (unchanged): "
-              f"{[f'{omega.item():.4f}' for omega in soln_dict['omegas']]}")
-        return soln_dict
 
     def _optimize_joint(self, soln_dict, max_iter=300):
         """
@@ -819,9 +835,9 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
         """
         Loss for joint rotation + morphology optimization (Phase 2).
 
-        SmoothL1 loss between observed and simulated projections.
+        Huber loss between observed and simulated projections.
         """
-        loss_func = nn.SmoothL1Loss(beta=0.3)
+        loss_func = nn.HuberLoss(delta=0.3)
         has_v0_fixed = 'v0s' in self.theta_fixed
         mode = 'joint' if has_v0_fixed else 'joint_with_v0'
 

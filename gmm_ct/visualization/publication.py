@@ -1941,4 +1941,328 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     print(f"✓ Saved to: {output_dir}")
     print("="*70 + "\n")
     
+    # Figure 6
+    
     return figures
+
+
+# ===========================================================================
+# Sinogram — single panel
+# ===========================================================================
+
+def plot_sinogram(proj_data, t, receivers, title=None, filename=None):
+    """
+    Single-panel sinogram: viridis imshow of the full projection dataset.
+
+    Time on the x-axis, detector height $y_r$ on the y-axis (increasing
+    upward, physical convention), intensity in ``viridis``.
+
+    Parameters
+    ----------
+    proj_data : array-like, shape (n_times, n_receivers)
+        Processed projection data with internal detector ordering
+        (index 0 = top receiver, last index = bottom receiver).
+        Accepts torch.Tensor or numpy.ndarray.
+    t : array-like
+        Time vector (seconds).
+    receivers : list
+        Receiver list as returned by ``construct_receivers``.
+    title : str, optional
+        Axes title.  If ``None`` no title is set.
+    filename : str or Path, optional
+        If given the figure is saved to this path at ``DPI`` resolution.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    proj_np = tensor_to_numpy(proj_data) if hasattr(proj_data, 'detach') \
+        else np.asarray(proj_data)
+    t_np = tensor_to_numpy(t) if hasattr(t, 'detach') else np.asarray(t)
+
+    # Receiver y-coordinates.  Internal ordering is top → bottom (descending).
+    rcvr_y_desc = np.array([r[1].item() for r in receivers[0]])
+    y_min, y_max = rcvr_y_desc.min(), rcvr_y_desc.max()
+
+    # Flip detector axis so index 0 → y_min (ascending), giving origin='lower'
+    proj_fl = proj_np[:, ::-1]   # (T, R)
+
+    fig, ax = plt.subplots(figsize=FIGSIZE_DOUBLE)
+
+    im = ax.imshow(
+        proj_fl.T,
+        aspect='auto',
+        origin='lower',
+        extent=[t_np[0], t_np[-1], y_min, y_max],
+        cmap='viridis',
+        interpolation='nearest',
+    )
+
+    cbar = fig.colorbar(im, ax=ax, pad=0.02)
+    cbar.set_label('Projection intensity')
+
+    ax.set_xlabel(r'Time $t$ (s)')
+    ax.set_ylabel(r'Detector position $y_r$ (m)')
+
+    if title is not None:
+        ax.set_title(title, fontweight='bold')
+
+    plt.tight_layout()
+    if filename:
+        save_figure(fig, filename)
+    return fig
+
+
+# ===========================================================================
+# Projection Modes — snapshot panels + modes-vs-time right panel
+# ===========================================================================
+
+def _detect_modes_3pt(proj_row, y_coords, min_frac=0.01):
+    """
+    3-point sliding-window peak detector (matches the reconstruction initialiser).
+
+    Returns y-coordinates of local maxima in ``proj_row`` that exceed
+    ``min_frac × max(proj_row)``.
+    """
+    threshold = min_frac * proj_row.max()
+    modes = []
+    for j in range(1, len(proj_row) - 1):
+        if proj_row[j - 1] < proj_row[j] > proj_row[j + 1] and proj_row[j] > threshold:
+            modes.append(y_coords[j])
+    return modes
+
+
+def plot_projection_modes(
+    proj_mixture,
+    t,
+    receivers,
+    proj_individuals=None,
+    time_snapshot_indices=None,
+    component_colors=None,
+    component_labels=None,
+    title=None,
+    filename=None,
+):
+    """
+    Projection-modes figure: snapshot panels (left) + modes-vs-time (right).
+
+    Layout
+    ------
+    A 2 × 4 GridSpec.  The left 2 × 2 block holds four direct-projection
+    snapshot panels at selected times; the right half holds a single panel
+    showing mixture modes as a function of time across the full duration.
+
+    Snapshot panels
+        Individual Gaussian projections are drawn in colour, the mixture in
+        black.  Vertical dashed lines drop from each mixture mode to the
+        baseline; a coloured dot marks the mode on the detector axis.
+
+    Modes-vs-time panel
+        Every time step: mixture modes as black filled circles (•).
+        Snapshot time steps: mode dots are replaced by the snapshot accent
+        colour defined by ``panel_accent_colors``.
+
+    Parameters
+    ----------
+    proj_mixture : array-like, shape (n_times, n_receivers)
+        Summed (mixture) projection.  Internal detector ordering
+        (index 0 = top receiver).  Accepts torch.Tensor or numpy.ndarray.
+    t : array-like
+        Time vector (seconds).
+    receivers : list
+        Receiver list as returned by ``construct_receivers``.
+    proj_individuals : list of array-like, optional
+        Per-Gaussian projections, each shape (n_times, n_receivers).
+        If ``None`` individual components are not drawn in the snapshot panels.
+    time_snapshot_indices : list of int, optional
+        Four time-step indices to feature in the left panels.  Defaults to
+        four equally-spaced steps across ``[0, n_times - 1]``.
+    component_colors : list, optional
+        One colour per Gaussian.  Defaults to ``plt.cm.rainbow`` samples.
+    component_labels : list of str, optional
+        Legend label for each Gaussian.  Defaults to ``['G1', 'G2', ...]``.
+    title : str, optional
+        Figure ``suptitle``.  If ``None`` no super-title is set.
+    filename : str or Path, optional
+        If given the figure is saved to this path at ``DPI`` resolution.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    from matplotlib.lines import Line2D
+
+    # ------------------------------------------------------------------
+    # Input coercion
+    # ------------------------------------------------------------------
+    proj_mix = np.asarray(
+        proj_mixture.detach().cpu().numpy()
+        if hasattr(proj_mixture, 'detach') else proj_mixture
+    )
+    t_np = np.asarray(
+        t.detach().cpu().numpy() if hasattr(t, 'detach') else t
+    )
+    n_times, n_rcvrs = proj_mix.shape
+
+    # Receiver y-coordinates (internal = descending; plotting = ascending)
+    rcvr_y_desc = np.array([r[1].item() for r in receivers[0]])
+    rcvr_y_asc  = rcvr_y_desc[::-1].copy()          # ascending: y_min → y_max
+    y_min, y_max = rcvr_y_asc[0], rcvr_y_asc[-1]
+
+    # Flip detector axis once
+    proj_mix_fl = proj_mix[:, ::-1].copy()           # (T, R), ascending y
+
+    indiv_fl = []
+    if proj_individuals is not None:
+        for pk in proj_individuals:
+            pk_np = np.asarray(pk.detach().cpu().numpy()
+                               if hasattr(pk, 'detach') else pk)
+            indiv_fl.append(pk_np[:, ::-1].copy())
+
+    K = len(indiv_fl)
+
+    # ------------------------------------------------------------------
+    # Defaults
+    # ------------------------------------------------------------------
+    if time_snapshot_indices is None:
+        time_snapshot_indices = list(
+            np.round(np.linspace(1, n_times * 0.75, 4)).astype(int)
+        )
+    if len(time_snapshot_indices) != 4:
+        raise ValueError("time_snapshot_indices must contain exactly 4 indices.")
+
+    if component_colors is None:
+        component_colors = [plt.cm.rainbow(v) for v in np.linspace(0, 1, max(K, 1))]
+
+    if component_labels is None:
+        component_labels = [rf'$G_{{{k+1}}}$' for k in range(K)]
+
+    # Accent colours for the four snapshot times in the right panel
+    panel_accent_colors = ['tab:red', 'tab:blue', 'tab:green', 'tab:orange']
+
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
+    fig = plt.figure(figsize=(14, 7))
+    gs  = GridSpec(2, 4, figure=fig, hspace=0.35, wspace=0.30)
+
+    snap_axes = [
+        fig.add_subplot(gs[0, 0]),
+        fig.add_subplot(gs[0, 1]),
+        fig.add_subplot(gs[1, 0]),
+        fig.add_subplot(gs[1, 1]),
+    ]
+    ax_modes = fig.add_subplot(gs[:, 2:])
+
+    y_max_global = proj_mix_fl.max() * 1.12
+
+    # ------------------------------------------------------------------
+    # Snapshot panels
+    # ------------------------------------------------------------------
+    for col, (ax, idx) in enumerate(zip(snap_axes, time_snapshot_indices)):
+        t_val = t_np[idx]
+        mix_row = proj_mix_fl[idx]
+
+        # Individual Gaussian projections
+        if indiv_fl:
+            for k, (p_k, color, label) in enumerate(
+                zip(indiv_fl, component_colors, component_labels)
+            ):
+                ax.plot(
+                    rcvr_y_asc, p_k[idx],
+                    color=color, lw=1.8, zorder=4,
+                    label=label if col == 0 else None,
+                )
+                ax.fill_between(rcvr_y_asc, p_k[idx],
+                                alpha=0.12, color=color)
+
+        # Mixture projection
+        ax.plot(rcvr_y_asc, mix_row, color='black', lw=2.2, zorder=5)
+
+        # Mixture modes: vertical dashed lines + accent dots on baseline
+        modes_snap = _detect_modes_3pt(mix_row, rcvr_y_asc)
+        if modes_snap:
+            peaks_snap = [mix_row[np.argmin(np.abs(rcvr_y_asc - m))]
+                          for m in modes_snap]
+            ax.vlines(modes_snap, 0, peaks_snap,
+                      color='darkred', linestyle='--', lw=1.0, zorder=6)
+            ax.plot(modes_snap, np.zeros(len(modes_snap)),
+                    marker='o', lw=0, color=panel_accent_colors[col],
+                    ms=6, zorder=7, label="Modes")
+
+        ax.set_xlim(y_min, y_max)
+        ax.set_ylim(-0.02 * y_max_global, y_max_global)
+        ax.set_title(f'$t = {t_val:.3f}$ s', fontweight='bold')
+        ax.set_facecolor('#f8f9fa')
+        ax.grid(True, lw=0.4, alpha=0.4)
+        if col >= 2:
+            ax.set_xlabel(r'Detector position $y_r$ (m)')
+        if col % 2 == 0:
+            ax.set_ylabel('Projection intensity')
+
+    # Legend on first panel only
+    # if indiv_fl:
+        # mix_handle = Line2D([0], [0], color='black', lw=2.2, label='Mixture')
+        # indiv_handles = [
+            # Line2D([0], [0], color=component_colors[k], lw=1.8,
+                #    label=component_labels[k])
+            # for k in range(K)
+        # ]
+        # snap_axes[0].legend(handles=[mix_handle] + indiv_handles,
+                            # fontsize=8, loc='upper left')
+    # else:
+    [snap_ax.legend(fontsize=8, loc='upper left') for snap_ax in snap_axes]
+
+    # ------------------------------------------------------------------
+    # Modes-vs-time panel
+    # ------------------------------------------------------------------
+    snap_set = set(time_snapshot_indices)
+    color_map = {idx: panel_accent_colors[i]
+                 for i, idx in enumerate(time_snapshot_indices)}
+
+    for n_t in range(n_times):
+        modes_t = _detect_modes_3pt(proj_mix_fl[n_t], rcvr_y_asc)
+        if not modes_t:
+            continue
+        color = color_map.get(n_t, 'black')
+        ax_modes.plot(
+            np.full(len(modes_t), t_np[n_t]),
+            modes_t,
+            marker='o', lw=0, ms=4,
+            color=color, zorder=5 if n_t in snap_set else 4,
+        )
+
+    ax_modes.set_xlabel(r'Time $t$ (s)')
+    ax_modes.set_ylabel(r'Detector position $y_r$ (m)')
+    ax_modes.set_title(
+        'Mixture Modes vs. Time\n'
+        '(snapshot times colour-coded to match left panels)',
+        fontweight='bold',
+    )
+    ax_modes.set_xlim(t_np[0], t_np[-1])
+    ax_modes.set_ylim(y_min - 0.05 * (y_max - y_min),
+                      y_max + 0.05 * (y_max - y_min))
+    ax_modes.set_facecolor('#f8f9fa')
+    ax_modes.grid(True, lw=0.4, alpha=0.4)
+
+    # Right-panel legend
+    legend_handles = [
+        Line2D([0], [0], marker='o', color='black', lw=0, ms=5,
+               label='Mixture modes'),
+    ] + [
+        Line2D([0], [0], marker='o', color=panel_accent_colors[i], lw=0,
+               ms=7, label=f'$t = {t_np[time_snapshot_indices[i]]:.3f}$ s')
+        for i in range(4)
+    ]
+    ax_modes.legend(handles=legend_handles, fontsize=8, loc='best')
+
+    # ------------------------------------------------------------------
+    # Figure title and save
+    # ------------------------------------------------------------------
+    if title is not None:
+        fig.suptitle(title, fontweight='bold')
+
+    plt.tight_layout()
+    if filename:
+        save_figure(fig, filename)
+    return fig

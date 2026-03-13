@@ -161,19 +161,25 @@ gmm-ct/
 │   └── reconstruct.yaml          # Example reconstruction config
 ├── scripts/
 │   ├── reconstruct.py            # Legacy script (generate + reconstruct)
+│   ├── run_experiments.py        # Batch experiment runner (N-sweep, seeds)
 │   └── analyse.py                # Load results, compute errors, plot
 ├── tests/
 │   ├── conftest.py               # Shared fixtures
-│   └── unit/                     # Unit tests
+│   └── unit/                     # Unit tests (20 tests)
 ├── experiments/
 │   ├── demos/                    # Demo & verification scripts
-│   ├── stability/                # Stability experiments
+│   ├── notebooks/                # Exploratory Jupyter notebooks
+│   ├── stability/                # N-scaling & stability experiment code
 │   └── deprecated/               # Superseded scripts (reference only)
 ├── examples/
 │   └── basic_reconstruction.py   # Self-contained end-to-end example
 ├── docs/
 │   ├── guides/quickstart.md
-│   └── research_notes/           # Algorithm design notes
+│   ├── research_notes/           # Algorithm design decisions
+│   └── NUMERICAL_EXPERIMENTS.md  # Planned experiments for journal submission
+├── data/
+│   ├── simulated/                # Raw projection data (per experiment)
+│   └── results/                  # Reconstruction outputs + batch_summary.csv
 ├── pyproject.toml                # Build config, deps, tool settings
 └── requirements.txt
 ```
@@ -229,6 +235,8 @@ python -m pytest tests/unit/test_dtw_omega.py -v
 
 Note: some tests are compute-intensive (DTW smoothness, efficiency comparisons) and may take several minutes on CPU.
 
+Tests cover: rotation correctness, ω estimation (spectral + model-fit), peak inflection timing, trajectory refinement, DTW variants, and isotropic baseline.
+
 ## Development
 
 ```bash
@@ -248,8 +256,19 @@ mypy gmm_ct/
 ## Documentation
 
 - [Quick Start Guide](docs/guides/quickstart.md)
-- [Research Notes](docs/research_notes/) — algorithm design decisions, experiment results
+- [Numerical Experiments Plan](docs/NUMERICAL_EXPERIMENTS.md) — planned experiments for journal submission
+- [Research Notes](docs/research_notes/) — algorithm design decisions and resolved issues
 - [Examples](examples/) — runnable scripts
+
+## Current Results
+
+Baseline batch results (N = 5, seeds 1–10, ω ∈ [2, 6] Hz, 65 time steps, 1.5 s, noiseless):
+
+- ω recovery: < 1% relative error across all Gaussians and seeds
+- Shape matrices $U_k$: < 2% Frobenius relative error (noiseless)
+- Attenuation $\alpha_k$: < 2% relative error
+
+See `data/results/batch_summary.csv` for the full tabulation.
 
 ## License
 
@@ -260,6 +279,8 @@ MIT
 **Daniel Burrows, Can Evren Yarman, Ozan Oktem**
 
 ## Citation
+
+A journal submission is in preparation. In the meantime, please cite this repository:
 
 ```bibtex
 @software{gmm_ct,
