@@ -454,7 +454,7 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
         else:
             ax_diff = fig.add_subplot(gs[2, col_idx], sharey=ax_row3_base)
         ax_diff.grid(False)
-        im_diff = ax_diff.imshow(img_diff, extent=extent, origin='lower', cmap='inferno', vmin=vmin_diff, vmax=vmax_diff, aspect='equal')
+        im_diff = ax_diff.imshow(img_diff, extent=extent, origin='lower', cmap='Greys', vmin=vmin_diff, vmax=vmax_diff, aspect='equal')
         # Add contours
         X_contour = np.linspace(extent[0], extent[1], img_diff.shape[1])
         Y_contour = np.linspace(extent[2], extent[3], img_diff.shape[0])

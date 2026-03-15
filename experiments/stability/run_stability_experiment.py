@@ -9,13 +9,13 @@ from time import time
 if __name__ == "__main__":
     
     # Which N values to test
-    N_values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    N_values = [1, 2, 3, 4, 5]
     
     # How many random seeds per N (higher = more robust statistics)
-    N_simulations_per_N = 50
+    N_simulations_per_N = 50 # Will set to 100 after dry run
     
     # Starting random seed
-    base_seed = 100
+    base_seed = 1
     
     # Save animations for debugging (creates MP4 for each experiment)
     save_animations = False  # Set to False to skip animations and save time

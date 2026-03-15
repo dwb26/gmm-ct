@@ -9,7 +9,7 @@ import math
 import warnings
 import torch
 
-def generate_true_param(d, K, initial_location, initial_velocity, initial_acceleration, min_rot, max_rot, device=None, sampling_dt=None, min_velocity_separation=0.5):
+def generate_true_param(d, K, initial_location, initial_velocity, initial_acceleration, min_rot, max_rot, device=None, sampling_dt=None, min_velocity_separation=0.5, min_diag_ratio=1.5):
     """
     Generate synthetic "true" parameters for GMM reconstruction testing.
     
@@ -50,6 +50,13 @@ def generate_true_param(d, K, initial_location, initial_velocity, initial_accele
         drawn freely; each subsequent candidate is accepted only when its
         distance to every already-accepted velocity exceeds this threshold.
         Default: 0.5.
+    min_diag_ratio : float, optional
+        Minimum ratio ``max(diag(U)) / min(diag(U))`` enforced on each
+        generated U_skew matrix.  Near-isotropic Gaussians (ratio ≈ 1)
+        have very weak rotation signatures in the projections, making ω
+        unidentifiable in practice.  Candidates are rejection-sampled
+        until the diagonal aspect ratio exceeds this threshold.
+        Default: 1.5.
         
     Returns
     -------
@@ -83,30 +90,47 @@ def generate_true_param(d, K, initial_location, initial_velocity, initial_accele
         for k in range(K)
     ]
 
-    # Skewness matrices
+    # Skewness matrices — rejection-sample to enforce minimum anisotropy.
+    # Near-isotropic Gaussians (diag ratio ≈ 1) have negligible rotation
+    # signature in the projections, making ω unidentifiable.
     U_ks = []
     for _ in range(K):
-        # Diagonal entries - must be strictly positive
-        mean_diag_val = 7.5
-        U_k_diag = torch.rand(size=(d,), dtype=torch.float64, device=device) * 18.0 + mean_diag_val
-        U_k_diag = torch.abs(U_k_diag)
-        
-        # Upper triangular entries - these can take any value
-        U_k_upper_triangle = 10 + torch.randn(size=((d - 1) * d // 2,), dtype=torch.float64, device=device)
-        
-        # Set the entries into the upper triangular U_skew matrix
-        U_k = torch.zeros(d, d, dtype=torch.float64, device=device)
-        triu_indices = torch.triu_indices(d, d, device=device)
-        diag_idx = 0
-        upper_idx = 0
-        for idx in range(len(triu_indices[0])):
-            i, j = triu_indices[0][idx], triu_indices[1][idx]
-            if i == j:
-                U_k[i, j] = U_k_diag[diag_idx]
-                diag_idx += 1
-            else:
-                U_k[i, j] = U_k_upper_triangle[upper_idx]
-                upper_idx += 1
+        for _u_attempt in range(500):
+            # Diagonal entries — must be strictly positive
+            mean_diag_val = 7.5
+            U_k_diag = torch.rand(size=(d,), dtype=torch.float64, device=device) * 18.0 + mean_diag_val
+            U_k_diag = torch.abs(U_k_diag)
+
+            # Enforce minimum diagonal aspect ratio
+            diag_ratio = (U_k_diag.max() / U_k_diag.min()).item()
+            if diag_ratio < min_diag_ratio:
+                continue
+
+            # Upper triangular entries — can take any value
+            U_k_upper_triangle = 10 + torch.randn(
+                size=((d - 1) * d // 2,), dtype=torch.float64, device=device
+            )
+
+            # Assemble upper-triangular matrix
+            U_k = torch.zeros(d, d, dtype=torch.float64, device=device)
+            triu_indices = torch.triu_indices(d, d, device=device)
+            diag_idx = 0
+            upper_idx = 0
+            for idx in range(len(triu_indices[0])):
+                i, j = triu_indices[0][idx], triu_indices[1][idx]
+                if i == j:
+                    U_k[i, j] = U_k_diag[diag_idx]
+                    diag_idx += 1
+                else:
+                    U_k[i, j] = U_k_upper_triangle[upper_idx]
+                    upper_idx += 1
+            break
+        else:
+            warnings.warn(
+                f"Could not generate a U_skew with diagonal ratio >= {min_diag_ratio} "
+                "after 500 attempts. Accepting last sample.",
+                RuntimeWarning, stacklevel=2,
+            )
         U_ks.append(U_k)
 
     alias_buffer = 0.10  # fractional guard band (±10 % of the π period)

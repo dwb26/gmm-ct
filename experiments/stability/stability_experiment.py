@@ -24,171 +24,77 @@ from gmm_ct.visualization.publication import reorder_theta_to_match_true
 from gmm_ct.config.defaults import GRAVITATIONAL_ACCELERATION
 
 
-def compute_parameter_accuracy_local(theta_true, theta_est, N, device):
+def compute_param_rel_error_local(theta_true, theta_est, N, device):
     """
-    Compute relative accuracy in parameter space as a percentage using LOCAL averaging.
-    
-    Computes per-Gaussian accuracy then averages across all Gaussians.
-    This ensures each Gaussian contributes equally to the final metric.
-    
+    Compute mean per-Gaussian relative L2 error in parameter space.
+
+    Each Gaussian contributes equally: rel_err_k = ||θ_k_est - θ_k_true||_2 / ||θ_k_true||_2.
+    Returns the mean over k.  Small values (→ 0) indicate better reconstruction.
+
     Returns:
-        float: Parameter accuracy percentage (100% = perfect match)
+        float: Mean relative L2 error across Gaussians.
     """
-    gaussian_accuracies = []
-    
+    rel_errors = []
+
     for k in range(N):
-        # Collect all parameters for this Gaussian into one vector
-        params_true = []
-        params_est = []
-        
-        # Alpha
-        params_true.append(theta_true['alphas'][k].flatten())
-        params_est.append(theta_est['alphas'][k].flatten())
-        
-        # x0
-        params_true.append(theta_true['x0s'][k].flatten())
-        params_est.append(theta_est['x0s'][k].flatten())
-        
-        # v0
-        params_true.append(theta_true['v0s'][k].flatten())
-        params_est.append(theta_est['v0s'][k].flatten())
-        
-        # U_skew (flatten matrix)
-        params_true.append(theta_true['U_skews'][k].flatten())
-        params_est.append(theta_est['U_skews'][k].flatten())
-        
-        # omega
-        params_true.append(theta_true['omegas'][k].flatten())
-        params_est.append(theta_est['omegas'][k].flatten())
-        
-        # Concatenate all parameters for Gaussian k
+        params_true, params_est = [], []
+
+        for key in ('alphas', 'x0s', 'v0s', 'U_skews', 'omegas'):
+            params_true.append(theta_true[key][k].flatten())
+            params_est.append(theta_est[key][k].flatten())
+
         theta_k_true = torch.cat(params_true)
-        theta_k_est = torch.cat(params_est)
-        
-        # Compute relative L2 error for this Gaussian
+        theta_k_est  = torch.cat(params_est)
+
         norm_true = torch.norm(theta_k_true).item()
         if norm_true > 1e-10:
-            relative_error_k = torch.norm(theta_k_true - theta_k_est).item() / norm_true
-            accuracy_k = 100.0 * (1.0 - relative_error_k)
-            # Clip to [0, 100] for this Gaussian
-            accuracy_k = np.clip(accuracy_k, 0.0, 100.0)
-            gaussian_accuracies.append(accuracy_k)
+            rel_errors.append(torch.norm(theta_k_true - theta_k_est).item() / norm_true)
         else:
-            # Edge case: if parameters are near zero, consider perfect match
-            gaussian_accuracies.append(100.0)
-    
-    # Average accuracy across all Gaussians
-    mean_accuracy = np.mean(gaussian_accuracies)
-    
-    return mean_accuracy
+            rel_errors.append(0.0)
+
+    return float(np.mean(rel_errors))
 
 
-def compute_parameter_accuracy_global(theta_true, theta_est, N, device):
+def compute_param_rel_error_global(theta_true, theta_est, N, device):
     """
-    Compute relative accuracy in parameter space as a percentage using GLOBAL concatenation.
-    
-    Concatenates all N Gaussians' parameters into one large vector, then computes
-    a single relative L2 error. This gives more weight to Gaussians with larger
-    parameter magnitudes.
-    
+    Compute relative L2 error over the concatenated all-Gaussian parameter vector.
+
+    Gives more weight to Gaussians with larger parameter magnitudes.
+
     Returns:
-        float: Parameter accuracy percentage (100% = perfect match)
+        float: Global relative L2 error.
     """
-    # Collect all parameters for ALL Gaussians into one vector
     all_params_true = []
-    all_params_est = []
+    all_params_est  = []
     
     for k in range(N):
-        # Alpha
-        all_params_true.append(theta_true['alphas'][k].flatten())
-        all_params_est.append(theta_est['alphas'][k].flatten())
-        
-        # x0
-        all_params_true.append(theta_true['x0s'][k].flatten())
-        all_params_est.append(theta_est['x0s'][k].flatten())
-        
-        # v0
-        all_params_true.append(theta_true['v0s'][k].flatten())
-        all_params_est.append(theta_est['v0s'][k].flatten())
-        
-        # U_skew (flatten matrix)
-        all_params_true.append(theta_true['U_skews'][k].flatten())
-        all_params_est.append(theta_est['U_skews'][k].flatten())
-        
-        # omega
-        all_params_true.append(theta_true['omegas'][k].flatten())
-        all_params_est.append(theta_est['omegas'][k].flatten())
-    
-    # Concatenate all parameters from all Gaussians
+        for key in ('alphas', 'x0s', 'v0s', 'U_skews', 'omegas'):
+            all_params_true.append(theta_true[key][k].flatten())
+            all_params_est.append(theta_est[key][k].flatten())
+
     theta_all_true = torch.cat(all_params_true)
-    theta_all_est = torch.cat(all_params_est)
-    
-    # Compute single relative L2 error for all parameters
+    theta_all_est  = torch.cat(all_params_est)
+
     norm_true = torch.norm(theta_all_true).item()
     if norm_true > 1e-10:
-        relative_error = torch.norm(theta_all_true - theta_all_est).item() / norm_true
-        accuracy = 100.0 * (1.0 - relative_error)
-        accuracy = np.clip(accuracy, 0.0, 100.0)
-    else:
-        # Edge case: if parameters are near zero, consider perfect match
-        accuracy = 100.0
-    
-    return accuracy
+        return (torch.norm(theta_all_true - theta_all_est).item() / norm_true)
+    return 0.0
 
 
-def compute_projection_accuracy_l2(proj_true, proj_est):
+def compute_proj_rel_error(proj_true, proj_est):
     """
-    Compute relative accuracy in projection space as a percentage using L2 norm.
-    
-    Parameters:
-        proj_true: True projections (list of tensors)
-        proj_est: Estimated projections (list of tensors)
-    
+    Compute relative L2 error in projection space.
+
     Returns:
-        float: Projection accuracy percentage (100% = perfect match)
+        float: ||p_est - p_true||_2 / ||p_true||_2  (small → better)
     """
-    # Concatenate all sources' projections
     proj_true_flat = torch.cat([p.flatten() for p in proj_true])
-    proj_est_flat = torch.cat([p.flatten() for p in proj_est])
-    
-    # Compute relative L2 error
-    norm_true = torch.norm(proj_true_flat, p=2).item()
-    if norm_true < 1e-10:
-        return 100.0  # Edge case: if true projections are zero
-    
-    relative_error = torch.norm(proj_true_flat - proj_est_flat, p=2).item() / norm_true
-    accuracy_percent = 100.0 * (1.0 - relative_error)
-    
-    return accuracy_percent
+    proj_est_flat  = torch.cat([p.flatten() for p in proj_est])
 
-
-def compute_projection_accuracy_l1(proj_true, proj_est):
-    """
-    Compute relative accuracy in projection space as a percentage using L1 norm.
-    
-    L1 norm is less sensitive to large outliers compared to L2, giving a metric
-    that may better reflect average pointwise accuracy.
-    
-    Parameters:
-        proj_true: True projections (list of tensors)
-        proj_est: Estimated projections (list of tensors)
-    
-    Returns:
-        float: Projection accuracy percentage (100% = perfect match)
-    """
-    # Concatenate all sources' projections
-    proj_true_flat = torch.cat([p.flatten() for p in proj_true])
-    proj_est_flat = torch.cat([p.flatten() for p in proj_est])
-    
-    # Compute relative L1 error
-    norm_true = torch.norm(proj_true_flat, p=1).item()
+    norm_true = torch.norm(proj_true_flat).item()
     if norm_true < 1e-10:
-        return 100.0  # Edge case: if true projections are zero
-    
-    relative_error = torch.norm(proj_true_flat - proj_est_flat, p=1).item() / norm_true
-    accuracy_percent = 100.0 * (1.0 - relative_error)
-    
-    return accuracy_percent
+        return 0.0
+    return (torch.norm(proj_true_flat - proj_est_flat).item() / norm_true)
 
 
 def run_single_experiment(N, seed, d, N_projs, t, sources, rcvrs, omega_min, omega_max, 
@@ -197,14 +103,18 @@ def run_single_experiment(N, seed, d, N_projs, t, sources, rcvrs, omega_min, ome
     Run a single GMM reconstruction experiment.
     
     Returns:
-        tuple: (param_accuracy_local, param_accuracy_global, proj_accuracy_l2, proj_accuracy_l1, computation_time)
+        tuple: (param_relerr_local, param_relerr_global, proj_relerr, computation_time)
     """
     from gmm_ct.visualization.publication import animate_temporal_gmm_comparison
     
     set_random_seeds(seed)
-    
+
+    # Sampling interval for Nyquist aliasing check in generate_true_param
+    dt = (t[-1] - t[0]).item() / (len(t) - 1)
+
     # Generate true parameters
-    theta_true = generate_true_param(d, N, i_loc, v_loc, a_loc, omega_min, omega_max, device=device)
+    theta_true = generate_true_param(d, N, i_loc, v_loc, a_loc, omega_min, omega_max,
+                                     device=device, sampling_dt=dt)
     
     x0s = theta_true['x0s']
     a0s = theta_true['a0s']
@@ -225,11 +135,10 @@ def run_single_experiment(N, seed, d, N_projs, t, sources, rcvrs, omega_min, ome
     # Generate estimated projections
     proj_est = GMM.generate_projections(t, theta_est)
     
-    # Compute accuracies (both local and global averaging methods)
-    param_accuracy_local = compute_parameter_accuracy_local(theta_true, theta_est, N, device)
-    param_accuracy_global = compute_parameter_accuracy_global(theta_true, theta_est, N, device)
-    proj_accuracy_l2 = compute_projection_accuracy_l2(proj_true, proj_est)
-    proj_accuracy_l1 = compute_projection_accuracy_l1(proj_true, proj_est)
+    # Compute relative errors (smaller = better)
+    param_relerr_local  = compute_param_rel_error_local(theta_true, theta_est, N, device)
+    param_relerr_global = compute_param_rel_error_global(theta_true, theta_est, N, device)
+    proj_relerr         = compute_proj_rel_error(proj_true, proj_est)
     
     # Save animation for debugging if requested
     if save_animations:
@@ -244,7 +153,7 @@ def run_single_experiment(N, seed, d, N_projs, t, sources, rcvrs, omega_min, ome
             import traceback
             traceback.print_exc()
     
-    return param_accuracy_local, param_accuracy_global, proj_accuracy_l2, proj_accuracy_l1, computation_time
+    return param_relerr_local, param_relerr_global, proj_relerr, computation_time
 
 
 def run_stability_experiment(N_values, N_simulations_per_N, base_seed=100, save_animations=True):
@@ -269,10 +178,10 @@ def run_stability_experiment(N_values, N_simulations_per_N, base_seed=100, save_
     print(f"   Total experiments: {len(N_values) * N_simulations_per_N}")
     print(f"   Save animations: {save_animations}")
     
-    # Fixed experiment parameters
+    # Fixed experiment parameters (match current simulate.yaml defaults)
     d = 2
-    N_projs = 2**6 + 1
-    t = torch.linspace(0., 2.0, N_projs, dtype=torch.float64, device=device)
+    N_projs = 150
+    t = torch.linspace(0., 1.5, N_projs, dtype=torch.float64, device=device)
     
     # Source/receiver configuration
     sources = [torch.tensor([-1, -1], dtype=torch.float64, device=device)]
@@ -282,12 +191,12 @@ def run_stability_experiment(N_values, N_simulations_per_N, base_seed=100, save_
     x2_max = sources[0][1].item() + 2.
     rcvrs = construct_receivers(device, (n_rcvrs, x1, x2_min, x2_max))
     
-    # Physical parameters
+    # Physical parameters (match current simulate.yaml defaults)
     i_loc = torch.tensor([1., 1.], dtype=torch.float64, device=device)
     v_loc = torch.tensor([.75, .5], dtype=torch.float64, device=device)
     a_loc = torch.tensor([0., -GRAVITATIONAL_ACCELERATION], dtype=torch.float64, device=device)
-    omega_min = -24.0
-    omega_max = omega_min + 4.0
+    omega_min = 2.0
+    omega_max = 6.0
     
     # Create output directory
     project_root = Path(__file__).parent.parent.parent
@@ -312,34 +221,35 @@ def run_stability_experiment(N_values, N_simulations_per_N, base_seed=100, save_
             print(f"  [{experiment_count}/{total_experiments}] N={N}, seed={seed}...", end=" ", flush=True)
             
             try:
-                param_acc_local, param_acc_global, proj_acc_l2, proj_acc_l1, comp_time = run_single_experiment(
-                    N, seed, d, N_projs, t, sources, rcvrs, 
-                    omega_min, omega_max, i_loc, v_loc, a_loc, 
+                param_relerr_local, param_relerr_global, proj_relerr, comp_time = run_single_experiment(
+                    N, seed, d, N_projs, t, sources, rcvrs,
+                    omega_min, omega_max, i_loc, v_loc, a_loc,
                     device, experiment_dir, save_animations=save_animations
                 )
-                
+
                 results.append({
                     'N': N,
                     'seed': seed,
-                    'param_accuracy_local': param_acc_local,
-                    'param_accuracy_global': param_acc_global,
-                    'proj_accuracy_l2': proj_acc_l2,
-                    'proj_accuracy_l1': proj_acc_l1,
-                    'computation_time': comp_time
+                    'param_relerr_local':  param_relerr_local,
+                    'param_relerr_global': param_relerr_global,
+                    'proj_relerr':         proj_relerr,
+                    'computation_time':    comp_time
                 })
-                
-                print(f"✓ Param(L): {param_acc_local:.2f}%, Param(G): {param_acc_global:.2f}%, Proj(L2): {proj_acc_l2:.2f}%, Proj(L1): {proj_acc_l1:.2f}%, Time: {comp_time:.2f}s")
-                
+
+                print(f"✓ Param err (local): {param_relerr_local:.4f}, "
+                      f"Param err (global): {param_relerr_global:.4f}, "
+                      f"Proj err: {proj_relerr:.4f}, "
+                      f"Time: {comp_time:.2f}s")
+
             except Exception as e:
                 print(f"✗ Failed: {e}")
                 results.append({
                     'N': N,
                     'seed': seed,
-                    'param_accuracy_local': np.nan,
-                    'param_accuracy_global': np.nan,
-                    'proj_accuracy_l2': np.nan,
-                    'proj_accuracy_l1': np.nan,
-                    'computation_time': np.nan
+                    'param_relerr_local':  np.nan,
+                    'param_relerr_global': np.nan,
+                    'proj_relerr':         np.nan,
+                    'computation_time':    np.nan
                 })
     
     # Convert to DataFrame
@@ -364,168 +274,148 @@ def run_stability_experiment(N_values, N_simulations_per_N, base_seed=100, save_
 
 def plot_stability_results(df, output_dir):
     """
-    Create publication-quality box plots with mean overlays for parameter and projection accuracy.
-    
+    Create publication-quality box plots with mean overlays for parameter and projection
+    relative L2 error vs N.  Lower values indicate better reconstruction.
+
+    Accepts DataFrames with either the new columns (param_relerr_local, param_relerr_global,
+    proj_relerr) or the legacy accuracy columns (param_accuracy_local, param_accuracy_global,
+    proj_accuracy_l2), converting the latter via rel_err = 1 - accuracy/100.
+
     Parameters:
-        df: DataFrame with columns [N, seed, param_accuracy_local, param_accuracy_global, 
-                                    proj_accuracy_l2, proj_accuracy_l1, computation_time]
-        output_dir: Directory to save plots
+        df: DataFrame produced by run_stability_experiment (or loaded from CSV).
+        output_dir: pathlib.Path — directory where plots are saved.
     """
-    # Get unique N values
+    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+
+    # --- resolve column names (new vs legacy) ---
+    if 'param_relerr_local' in df.columns:
+        col_local  = 'param_relerr_local'
+        col_global = 'param_relerr_global'
+        col_proj   = 'proj_relerr'
+    else:
+        # Legacy accuracy columns → convert
+        df = df.copy()
+        df['param_relerr_local']  = 1.0 - df['param_accuracy_local']  / 100.0
+        df['param_relerr_global'] = 1.0 - df['param_accuracy_global'] / 100.0
+        df['proj_relerr']         = 1.0 - df['proj_accuracy_l2']      / 100.0
+        col_local  = 'param_relerr_local'
+        col_global = 'param_relerr_global'
+        col_proj   = 'proj_relerr'
+
     N_values = sorted(df['N'].unique())
-    
-    # Prepare data for box plots (filter out NaNs)
-    param_local_data = []
-    param_global_data = []
-    proj_l2_data = []
-    proj_l1_data = []
-    param_local_means = []
-    param_global_means = []
-    proj_l2_means = []
-    proj_l1_means = []
-    
+
+    param_local_data, param_global_data, proj_data = [], [], []
+    param_local_means, param_global_means, proj_means = [], [], []
+
+    def geom_mean(s):
+        """Geometric mean of a Series, ignoring NaNs and non-positive values."""
+        s = s.dropna()
+        s = s[s > 0]
+        return float(np.exp(np.log(s).mean())) if len(s) > 0 else np.nan
+
     for N in N_values:
         data_N = df[df['N'] == N]
-        
-        # Filter out NaN values for box plots
-        param_local_values = data_N['param_accuracy_local'].dropna().values
-        param_global_values = data_N['param_accuracy_global'].dropna().values
-        proj_l2_values = data_N['proj_accuracy_l2'].dropna().values
-        proj_l1_values = data_N['proj_accuracy_l1'].dropna().values
-        
-        param_local_data.append(param_local_values)
-        param_global_data.append(param_global_values)
-        proj_l2_data.append(proj_l2_values)
-        proj_l1_data.append(proj_l1_values)
-        
-        # Compute means (pandas mean already ignores NaN)
-        param_local_means.append(data_N['param_accuracy_local'].mean())
-        param_global_means.append(data_N['param_accuracy_global'].mean())
-        proj_l2_means.append(data_N['proj_accuracy_l2'].mean())
-        proj_l1_means.append(data_N['proj_accuracy_l1'].mean())
-    
-    # Create figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-    
-    # ============================================
-    # Subplot 1: Parameter Space Accuracy
-    # ============================================
-    
-    # Box plots for local averaging (primary, more visible)
-    bp1 = ax1.boxplot(param_local_data, positions=N_values, widths=0.6,
-                      patch_artist=True,
-                      boxprops=dict(facecolor='lightblue', alpha=0.6, edgecolor='blue', linewidth=1.5),
-                      medianprops=dict(color='darkblue', linewidth=2),
-                      whiskerprops=dict(color='blue', linewidth=1.5),
-                      capprops=dict(color='blue', linewidth=1.5),
-                      flierprops=dict(marker='o', markerfacecolor='blue', markersize=6, 
-                                     markeredgecolor='darkblue', alpha=0.5))
-    
-    # Overlay mean lines for both methods
-    ax1.plot(N_values, param_local_means, 'ro-', linewidth=3, markersize=10, 
-            label='Local avg.', zorder=10, markeredgewidth=2, markeredgecolor='darkred')
-    ax1.plot(N_values, param_global_means, 'go--', linewidth=3, markersize=10, 
-            label='Global avg.', zorder=10, markeredgewidth=2, markeredgecolor='darkgreen')
-    
+        param_local_data.append(data_N[col_local].dropna().values)
+        param_global_data.append(data_N[col_global].dropna().values)
+        proj_data.append(data_N[col_proj].dropna().values)
+        param_local_means.append(geom_mean(data_N[col_local]))
+        param_global_means.append(geom_mean(data_N[col_global]))
+        proj_means.append(geom_mean(data_N[col_proj]))
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+
+    # ------------------------------------------------------------------ #
+    # Subplot 1: Parameter-space relative error
+    # ------------------------------------------------------------------ #
+    bp1 = ax1.boxplot(
+        param_local_data, positions=N_values, widths=0.6,
+        patch_artist=True,
+        boxprops=dict(facecolor='lightblue', alpha=0.6, edgecolor='blue', linewidth=1.5),
+        medianprops=dict(color='darkblue', linewidth=2),
+        whiskerprops=dict(color='blue', linewidth=1.5),
+        capprops=dict(color='blue', linewidth=1.5),
+        flierprops=dict(marker='o', markerfacecolor='blue', markersize=6,
+                        markeredgecolor='darkblue', alpha=0.5),
+    )
+    ax1.plot(N_values, param_local_means, 'ro-', linewidth=3, markersize=10,
+             zorder=10, markeredgewidth=2, markeredgecolor='darkred', label='Geom. mean (local avg.)')
+    # ax1.plot(N_values, param_global_means, 'go--', linewidth=3, markersize=10,
+            #  zorder=10, markeredgewidth=2, markeredgecolor='darkgreen', label='Geom. mean (global avg.)')
+
+    ax1.set_yscale('log')
     ax1.set_xlabel('Number of Gaussians (N)', fontsize=20, fontweight='bold')
-    ax1.set_ylabel('Parameter space accuracy (%)', fontsize=20, fontweight='bold')
-    ax1.set_title('Parameter space accuracy vs N', fontsize=22, fontweight='bold', pad=15)
+    ax1.set_ylabel(r'Relative $\ell_2$ error  $\|\hat{\theta}-\theta^*\|/\|\theta^*\|$',
+                   fontsize=16, fontweight='bold')
+    ax1.set_title('Parameter-space error vs N', fontsize=22, fontweight='bold', pad=15)
     ax1.set_xticks(N_values)
     ax1.set_xticklabels([int(n) for n in N_values])
     ax1.tick_params(labelsize=16)
-    ax1.grid(True, alpha=0.3, linestyle='--')
-    ax1.set_ylim(-5, 105)
-    
-    # Custom legend
-    from matplotlib.patches import Patch
-    from matplotlib.lines import Line2D
+    ax1.grid(True, alpha=0.3, linestyle='--', which='both')
+
     legend_elements = [
-        Patch(facecolor='lightblue', edgecolor='blue', alpha=0.6, label='Local accuracy distribution (box plot)'),
-        Line2D([0], [0], color='red', marker='o', linewidth=3, markersize=10, 
-               markeredgewidth=2, markeredgecolor='darkred', label='Mean local accuracy'),
-        Line2D([0], [0], color='green', marker='o', linestyle='--', linewidth=3, markersize=10,
-               markeredgewidth=2, markeredgecolor='darkgreen', label='Mean global accuracy')
+        Patch(facecolor='lightblue', edgecolor='blue', alpha=0.6, label='Error distribution (box plot)'),
+        Line2D([0], [0], color='red', marker='o', linewidth=3, markersize=10,
+               markeredgewidth=2, markeredgecolor='darkred', label='Geom. mean error (local avg.)'),
+        # Line2D([0], [0], color='green', marker='o', linestyle='--', linewidth=3, markersize=10,
+            #    markeredgewidth=2, markeredgecolor='darkgreen', label='Geom. mean error (global avg.)'),
     ]
-    ax1.legend(handles=legend_elements, fontsize=14, loc='lower left', framealpha=0.9)
-    
-    # ============================================
-    # Subplot 2: Projection Space Accuracy (L1 norm only)
-    # ============================================
-    
-    # Box plots with lighter color (L1 norm)
-    bp2 = ax2.boxplot(proj_l1_data, positions=N_values, widths=0.6,
-                      patch_artist=True,
-                      boxprops=dict(facecolor='lightcoral', alpha=0.6, edgecolor='red', linewidth=1.5),
-                      medianprops=dict(color='darkred', linewidth=2),
-                      whiskerprops=dict(color='red', linewidth=1.5),
-                      capprops=dict(color='red', linewidth=1.5),
-                      flierprops=dict(marker='o', markerfacecolor='red', markersize=6,
-                                     markeredgecolor='darkred', alpha=0.5))
-    
-    # Overlay mean for L1 norm
-    ax2.plot(N_values, proj_l1_means, 'go-', linewidth=3, markersize=10,
-            label='Mean accuracy', zorder=10, markeredgewidth=2, markeredgecolor='darkgreen')
-    
+    ax1.legend(handles=legend_elements, fontsize=13, loc='upper left', framealpha=0.9)
+
+    # ------------------------------------------------------------------ #
+    # Subplot 2: Projection-space relative error
+    # ------------------------------------------------------------------ #
+    bp2 = ax2.boxplot(
+        proj_data, positions=N_values, widths=0.6,
+        patch_artist=True,
+        boxprops=dict(facecolor='lightcoral', alpha=0.6, edgecolor='red', linewidth=1.5),
+        medianprops=dict(color='darkred', linewidth=2),
+        whiskerprops=dict(color='red', linewidth=1.5),
+        capprops=dict(color='red', linewidth=1.5),
+        flierprops=dict(marker='o', markerfacecolor='red', markersize=6,
+                        markeredgecolor='darkred', alpha=0.5),
+    )
+    ax2.plot(N_values, proj_means, 'go-', linewidth=3, markersize=10,
+             zorder=10, markeredgewidth=2, markeredgecolor='darkgreen', label='Geom. mean error')
+
     ax2.set_xlabel('Number of Gaussians (N)', fontsize=20, fontweight='bold')
-    ax2.set_ylabel('Projection space accuracy (%)', fontsize=20, fontweight='bold')
-    ax2.set_title('Projection space accuracy vs N (L1 norm)', fontsize=22, fontweight='bold', pad=15)
+    ax2.set_title('Projection-space error vs N', fontsize=22, fontweight='bold', pad=15)
     ax2.set_xticks(N_values)
     ax2.set_xticklabels([int(n) for n in N_values])
-    ax2.tick_params(labelsize=16)
-    ax2.grid(True, alpha=0.3, linestyle='--')
-    ax2.set_ylim(-5, 105)
-    
-    # Custom legend
+    ax2.tick_params(labelsize=16, labelleft=False)
+    ax2.grid(True, alpha=0.3, linestyle='--', which='both')
+
     legend_elements = [
-        Patch(facecolor='lightcoral', edgecolor='red', alpha=0.6, label='Accuracy distribution (box plot)'),
+        Patch(facecolor='lightcoral', edgecolor='red', alpha=0.6, label='Error distribution (box plot)'),
         Line2D([0], [0], color='green', marker='o', linewidth=3, markersize=10,
-               markeredgewidth=2, markeredgecolor='darkgreen', label='Mean accuracy')
+               markeredgewidth=2, markeredgecolor='darkgreen', label='Geom. mean error'),
     ]
-    ax2.legend(handles=legend_elements, fontsize=14, loc='lower left', framealpha=0.9)
-    
+    ax2.legend(handles=legend_elements, fontsize=13, loc='upper left', framealpha=0.9)
+
     plt.tight_layout()
-    
-    # Save figure
-    output_path = output_dir / 'stability_boxplot_with_means.pdf'
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    print(f"✅ Saved: {output_path}")
-    
-    output_path_png = output_dir / 'stability_boxplot_with_means.png'
-    plt.savefig(output_path_png, dpi=300, bbox_inches='tight')
-    print(f"✅ Saved: {output_path_png}")
-    
+
+    for fname in ('stability_boxplot_with_means.pdf', 'stability_boxplot_with_means.png'):
+        out = output_dir / fname
+        plt.savefig(out, dpi=300, bbox_inches='tight')
+        print(f"Saved: {out}")
     plt.close()
-    
-    # ============================================
-    # Create summary statistics table
-    # ============================================
-    print("\n" + "="*120)
-    print("SUMMARY STATISTICS")
-    print("="*120)
-    print(f"{'N':<4} {'Local Mean':<12} {'Local Std':<12} {'Global Mean':<13} {'Global Std':<13} {'Proj(L2) Mean':<15} {'Proj(L2) Std':<15} {'Proj(L1) Mean':<15} {'Proj(L1) Std':<15} {'Valid':<10}")
-    print("-"*120)
-    
+
+    # ------------------------------------------------------------------ #
+    # Summary table
+    # ------------------------------------------------------------------ #
+    print("\n" + "="*80)
+    print("SUMMARY  (relative L2 error — lower is better; mean = geometric mean)")
+    print("="*80)
+    print(f"{'N':<5} {'Param(local) geom.mean':<24} {'Param(local) std':<20} "
+          f"{'Proj geom.mean':<16} {'Proj std':<15} {'Valid':<6}")
+    print("-"*80)
     for N in N_values:
         data_N = df[df['N'] == N]
-        param_local_mean = data_N['param_accuracy_local'].mean()
-        param_local_std = data_N['param_accuracy_local'].std()
-        param_global_mean = data_N['param_accuracy_global'].mean()
-        param_global_std = data_N['param_accuracy_global'].std()
-        proj_l2_mean = data_N['proj_accuracy_l2'].mean()
-        proj_l2_std = data_N['proj_accuracy_l2'].std()
-        proj_l1_mean = data_N['proj_accuracy_l1'].mean()
-        proj_l1_std = data_N['proj_accuracy_l1'].std()
+        n_valid = data_N[col_local].notna().sum()
         n_total = len(data_N)
-        n_valid_local = data_N['param_accuracy_local'].notna().sum()
-        n_valid_global = data_N['param_accuracy_global'].notna().sum()
-        n_valid_proj_l2 = data_N['proj_accuracy_l2'].notna().sum()
-        n_valid_proj_l1 = data_N['proj_accuracy_l1'].notna().sum()
-        
-        print(f"{int(N):<4} {param_local_mean:>11.2f}% {param_local_std:>11.2f}% "
-              f"{param_global_mean:>12.2f}% {param_global_std:>12.2f}% "
-              f"{proj_l2_mean:>14.2f}% {proj_l2_std:>14.2f}% "
-              f"{proj_l1_mean:>14.2f}% {proj_l1_std:>14.2f}% {n_valid_local}/{n_total}")
-    
-    print("="*120)
+        print(f"{int(N):<5} {geom_mean(data_N[col_local]):>22.5f}   {data_N[col_local].std():>18.5f}   "
+              f"{geom_mean(data_N[col_proj]):>14.5f}   {data_N[col_proj].std():>13.5f}   "
+              f"{n_valid}/{n_total}")
+    print("="*80)
 
 
