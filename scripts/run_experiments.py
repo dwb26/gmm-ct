@@ -24,6 +24,10 @@ import traceback
 import csv
 from pathlib import Path
 
+# Ensure the project root is on sys.path when the script is run directly
+# (e.g. `python scripts/run_experiments.py` from any working directory).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(

@@ -10,10 +10,10 @@ import matplotlib.cm as cm
 import torch
 import numpy as np
 
-# Default font sizes for diagnostic plots
-_LABEL_FONTSIZE = 20
-_TITLE_FONTSIZE = 22
-_TICK_FONTSIZE = 16
+# Default font sizes for diagnostic plots — kept in sync with publication._FS_*
+_LABEL_FONTSIZE = 13
+_TITLE_FONTSIZE = 14
+_TICK_FONTSIZE = 11
 
 
 def plot_trajectory_estimations(model, res):
@@ -435,8 +435,8 @@ def plot_trajectory_fitting(model, res):
     max_rcvr_h = model.receivers[0][0][1].item()
 
     # ── Figure ────────────────────────────────────────────────────────────
-    fig, axes = plt.subplots(1, 2, figsize=(20, 8),
-                             gridspec_kw={'wspace': 0.30})
+    fig, axes = plt.subplots(1, 2, figsize=(20, 8), sharey=True,
+                             gridspec_kw={'wspace': 0.05})
 
     # ═══════════════════════════════════════════════════════════════════════
     # Panel 1 — Raw detected peaks (all black)
@@ -450,8 +450,8 @@ def plot_trajectory_fitting(model, res):
                        s=12, color='black', alpha=0.7, zorder=5)
 
     ax.set_title('Detected peaks (raw)', fontsize=_TITLE_FONTSIZE)
-    ax.set_xlabel('Time', fontsize=_LABEL_FONTSIZE)
-    ax.set_ylabel('Receiver height', fontsize=_LABEL_FONTSIZE)
+    ax.set_xlabel('Time (s)', fontsize=_LABEL_FONTSIZE)
+    ax.set_ylabel('Receiver height (m)', fontsize=_LABEL_FONTSIZE)
     ax.tick_params(axis='both', which='major', labelsize=_TICK_FONTSIZE)
     ax.grid(True, alpha=0.3, linestyle='--')
 
@@ -486,13 +486,13 @@ def plot_trajectory_fitting(model, res):
                    s=10, color='black', zorder=5)
 
     ax.set_title('Fitted trajectories', fontsize=_TITLE_FONTSIZE)
-    ax.set_xlabel('Time', fontsize=_LABEL_FONTSIZE)
-    ax.set_ylabel('Receiver height', fontsize=_LABEL_FONTSIZE)
+    ax.set_xlabel('Time (s)', fontsize=_LABEL_FONTSIZE)
     ax.tick_params(axis='both', which='major', labelsize=_TICK_FONTSIZE)
+    ax.tick_params(axis='y', labelleft=False)
     ax.legend(fontsize=13, framealpha=0.9, ncol=max(1, model.N // 3))
     ax.grid(True, alpha=0.3, linestyle='--')
 
-    fig.suptitle('Trajectory optimisation — fitting result',
+    fig.suptitle('Trajectory optimization — fitting result',
                  fontsize=_TITLE_FONTSIZE + 2, fontweight='bold', y=1.01)
     plt.tight_layout()
 

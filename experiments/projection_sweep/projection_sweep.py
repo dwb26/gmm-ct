@@ -3,7 +3,7 @@ Projection Sweep Experiment
 ============================
 Measures absolute error across all GMM parameters as a function of the
 number of projections T.  The number of projections is varied in powers of
-two: T = 2^2, 2^3, ..., 2^9 (i.e. 4, 8, 16, 32, 64, 128, 256, 512).
+two: T = 2^2, 2^3, ..., 2^10 (i.e. 4, 8, 16, 32, 64, 128, 256, 512, 1024).
 
 A single fixed seed is used across all values of T so that the ground-truth
 parameters are identical in every run, making the comparison fair.
@@ -18,6 +18,8 @@ results/projection_sweep_<timestamp>/
 
 from pathlib import Path
 from datetime import datetime
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import numpy as np
 import pandas as pd
 import torch
@@ -48,10 +50,10 @@ RCVR_X      = 4.0
 RCVR_Y_MIN  = -3.0
 RCVR_Y_MAX  = 1.0
 
-# Powers of 2: 2^2 … 2^9
-PROJ_COUNTS = [2**p for p in range(2, 10)]   # [4, 8, 16, 32, 64, 128, 256, 512]
+# Powers of 2: 2^2 … 2^10
+PROJ_COUNTS = [2**p for p in range(2, 11)]   # [4, 8, 16, 32, 64, 128, 256, 512, 1024]
 
-SEED = 7
+SEED = 9
 
 
 # ---------------------------------------------------------------------------

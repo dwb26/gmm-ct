@@ -34,6 +34,15 @@ FIGSIZE_SINGLE = (3.5, 2.8)  # Single column width (~3.5 inches)
 FIGSIZE_DOUBLE = (7.0, 3.5)  # Double column width (~7 inches)
 FIGSIZE_TALL = (7.0, 5.0)    # Double column, taller
 
+# Shared manuscript font sizes — edit here to rescale all figures together
+_FS_LABEL = 13       # axis labels (xlabel, ylabel)
+_FS_TITLE = 14       # subplot / panel titles
+_FS_SUPTITLE = 15    # figure-level suptitle
+_FS_TICK = 11        # tick labels
+_FS_LEGEND = 10      # legend text
+_FS_CBAR = 12        # colourbar labels
+_FS_CBAR_TICK = 10   # colourbar tick labels
+
 # Color schemes for consistency
 COLORS_TRUE = '#2E86AB'      # Blue for true values
 COLORS_EST = '#A23B72'       # Purple/magenta for estimates
@@ -422,11 +431,11 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
         Y_contour = np.linspace(extent[2], extent[3], img_true.shape[0])
         ax_true.contour(X_contour, Y_contour, img_true, levels=3, colors='black', linewidths=0.7, alpha=0.4)
         if col_idx == 0:
-            ax_true.set_ylabel('Ground Truth\n\nHeight', fontweight='bold', fontsize=18)
+            ax_true.set_ylabel('Ground Truth\n\nHeight', fontweight='bold', fontsize=_FS_LABEL)
         else:
             ax_true.tick_params(axis='y', labelleft=False)
-        ax_true.set_title(f'$\\rho_{{{k+1}}}$', fontweight='bold', fontsize=20, pad=12)
-        ax_true.tick_params(axis='both', which='major', labelsize=15, labelbottom=False)
+        ax_true.set_title(f'$\\rho_{{{k+1}}}$', fontweight='bold', fontsize=_FS_TITLE, pad=12)
+        ax_true.tick_params(axis='both', which='major', labelsize=_FS_TICK, labelbottom=False)
         
         # Row 2: Reconstructed
         if ax_row2_base is None:
@@ -441,11 +450,11 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
         Y_contour = np.linspace(extent[2], extent[3], img_est.shape[0])
         ax_est.contour(X_contour, Y_contour, img_est, levels=3, colors='black', linewidths=0.7, alpha=0.4)
         if col_idx == 0:
-            ax_est.set_ylabel('Reconstructed\n\nHeight', fontweight='bold', fontsize=18)
+            ax_est.set_ylabel('Reconstructed\n\nHeight', fontweight='bold', fontsize=_FS_LABEL)
         else:
             ax_est.tick_params(axis='y', labelleft=False)
-        ax_est.set_title(f'$\\widehat{{\\rho}}_{{{k+1}}}$', fontweight='bold', fontsize=20, pad=12)
-        ax_est.tick_params(axis='both', which='major', labelsize=15, labelbottom=False)
+        ax_est.set_title(f'$\\widehat{{\\rho}}_{{{k+1}}}$', fontweight='bold', fontsize=_FS_TITLE, pad=12)
+        ax_est.tick_params(axis='both', which='major', labelsize=_FS_TICK, labelbottom=False)
         
         # Row 3: Log10 Absolute Error
         if ax_row3_base is None:
@@ -461,33 +470,33 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
         ax_diff.contour(X_contour, Y_contour, img_diff, levels=3, 
                        colors='white', linewidths=0.7, alpha=0.4)
         if col_idx == 0:
-            ax_diff.set_ylabel('Log$_{10}$ Error\n\nHeight', fontweight='bold', fontsize=18)
+            ax_diff.set_ylabel('Log$_{10}$ Error\n\nHeight', fontweight='bold', fontsize=_FS_LABEL)
         else:
             ax_diff.tick_params(axis='y', labelleft=False)
-        ax_diff.set_title(f'$\\log_{{10}}|\\rho_{{{k+1}}} - \\widehat{{\\rho}}_{{{k+1}}}|$', fontweight='bold', fontsize=20, pad=12)
-        ax_diff.set_xlabel('Depth (m)', fontweight='bold', fontsize=18)
-        ax_diff.tick_params(axis='both', which='major', labelsize=15)
+        ax_diff.set_title(f'$\\log_{{10}}|\\rho_{{{k+1}}} - \\widehat{{\\rho}}_{{{k+1}}}|$', fontweight='bold', fontsize=_FS_TITLE, pad=12)
+        ax_diff.set_xlabel('Depth (m)', fontweight='bold', fontsize=_FS_LABEL)
+        ax_diff.tick_params(axis='both', which='major', labelsize=_FS_TICK)
         
     # Add colorbars in a separate column to maintain subplot sizes
     # Create axes for the colorbars on the right
     cax_true = fig.add_axes([0.91, ax_row1_base.get_position().y0, 0.015, ax_row1_base.get_position().height])
     cbar_true = fig.colorbar(im_true, cax=cax_true)
-    cbar_true.set_label('Attenuation', fontweight='bold', fontsize=16)
-    cbar_true.ax.tick_params(labelsize=14)
+    cbar_true.set_label('Attenuation', fontweight='bold', fontsize=_FS_CBAR)
+    cbar_true.ax.tick_params(labelsize=_FS_CBAR_TICK)
 
     cax_est = fig.add_axes([0.91, ax_row2_base.get_position().y0, 0.015, ax_row2_base.get_position().height])
     cbar_est = fig.colorbar(im_est, cax=cax_est)
-    cbar_est.set_label('Attenuation', fontweight='bold', fontsize=16)
-    cbar_est.ax.tick_params(labelsize=14)
+    cbar_est.set_label('Attenuation', fontweight='bold', fontsize=_FS_CBAR)
+    cbar_est.ax.tick_params(labelsize=_FS_CBAR_TICK)
 
     cax_diff = fig.add_axes([0.91, ax_row3_base.get_position().y0, 0.015, ax_row3_base.get_position().height])
     cbar_diff = fig.colorbar(im_diff, cax=cax_diff)
-    cbar_diff.set_label('Log$_{10}$ Error', fontweight='bold', fontsize=16)
-    cbar_diff.ax.tick_params(labelsize=14)
+    cbar_diff.set_label('Log$_{10}$ Error', fontweight='bold', fontsize=_FS_CBAR)
+    cbar_diff.ax.tick_params(labelsize=_FS_CBAR_TICK)
     
     # Overall title
     fig.suptitle(f'Gaussian Reconstruction', 
-                 fontweight='bold', fontsize=22, y=0.98)
+                 fontweight='bold', fontsize=_FS_SUPTITLE, y=0.98)
     
     if filename:
         save_figure(fig, filename)
@@ -504,7 +513,7 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
                                  t, K, d, time_indices=None, n_times=4,
                                  filename=None, show_trajectories=True,
                                  spatial_bounds=None, title='Reconstructed',
-                                 title_fontsize=20, label_fontsize=18, tick_fontsize=16):
+                                 title_fontsize=_FS_TITLE, label_fontsize=_FS_LABEL, tick_fontsize=_FS_TICK):
     """
     Figure 3: Symmetric comparison of ground truth and estimated GMMs over time.
     
@@ -541,9 +550,9 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     # Select time indices
     if time_indices is None:
         # Evenly spaced times across the duration
-        time_indices = np.linspace(0, len(t) - 1, n_times, dtype=int)
-    else:
-        n_times = len(time_indices)
+        # time_indices = np.linspace(0, len(t) - 1, n_times, dtype=int)
+        time_indices = np.array([80, 90, 100])
+    n_times = len(time_indices)
     
     selected_times = t[time_indices]
     
@@ -633,14 +642,14 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
                 Line2D([0], [0], color='gold', linewidth=2, alpha=0.1, label='Rays')
             ])
             ax_left.legend(handles=legend_elements, loc='upper left', 
-                          fontsize=14, framealpha=0.9, ncol=1, 
+                          fontsize=_FS_LEGEND, framealpha=0.9, ncol=1, 
                           handlelength=1.5, handletextpad=0.5, borderpad=0.4)
         
         # Y-label shows time on all rows
         ax_left.set_ylabel(f't = {t_val_scalar:.2f} s\nHeight', 
                           fontweight='bold', fontsize=label_fontsize)
         if row_idx == n_times - 1:  # Only on bottom row
-            ax_left.set_xlabel('Depth', fontweight='bold', fontsize=label_fontsize)
+            ax_left.set_xlabel('Depth (m)', fontweight='bold', fontsize=label_fontsize)
             ax_left.tick_params(axis='both', which='major', labelsize=tick_fontsize)
         else:
             ax_left.tick_params(axis='y', which='major', labelsize=tick_fontsize)
@@ -656,7 +665,6 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         y_max = receiver_heights_arr.max() + 0.1
         ax_left.set_ylim(y_min, y_max)
         ax_left.grid(True, alpha=0.3, linestyle='--')
-        ax_left.set_facecolor('#f8f9fa')
         
         # CENTER COLUMN: Overlaid projections
         ax_center = fig.add_subplot(gs[row_idx, 1])
@@ -673,7 +681,7 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         
         # Plot projections
         ax_center.plot(sorted_proj_true, sorted_heights,
-                      linestyle='-', color='blue', linewidth=2.5,
+                      linestyle='-', color='black', linewidth=2.5,
                       label='True', alpha=0.8)
         ax_center.plot(sorted_proj_est, sorted_heights,
                       linestyle='--', color='red', linewidth=2.5,
@@ -682,16 +690,15 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         # Title (no time on center/right columns)
         if row_idx == 0:
             ax_center.set_title('Projections', fontweight='bold', fontsize=title_fontsize, pad=12)
-            ax_center.legend(fontsize=14, loc='best', framealpha=0.9)
+            ax_center.legend(fontsize=_FS_LEGEND, loc='best', framealpha=0.9)
         
         if row_idx == n_times - 1:  # Only on bottom row
             ax_center.set_xlabel('Intensity', fontweight='bold', fontsize=label_fontsize)
             ax_center.tick_params(axis='x', which='major', labelsize=tick_fontsize)
         else:
             ax_center.tick_params(axis='x', which='major', labelbottom=False)
-        ax_center.tick_params(axis='y', which='major', labelleft=False)
+        ax_center.tick_params(axis='y', which='major', labelleft=False, labelsize=tick_fontsize)
         ax_center.grid(True, alpha=0.3, linestyle='--')
-        ax_center.set_facecolor('#ffffff')
         
         # RIGHT COLUMN: Estimated GMM (mirrored orientation)
         ax_right = fig.add_subplot(gs[row_idx, 2])
@@ -712,15 +719,15 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
             legend_elements = [Patch(facecolor=colors[k], edgecolor='black', 
                                     label=f'$\\widehat{{\\rho}}_{{{k+1}}}$') for k in range(K)]
             ax_right.legend(handles=legend_elements, loc='upper right', 
-                          fontsize=14, framealpha=0.9, ncol=1, 
+                          fontsize=_FS_LEGEND, framealpha=0.9, ncol=1, 
                           handlelength=1.3, handletextpad=0.4, borderpad=0.3)
         
         if row_idx == n_times - 1:  # Only on bottom row
-            ax_right.set_xlabel('Depth', fontweight='bold', fontsize=label_fontsize)
+            ax_right.set_xlabel('Depth (m)', fontweight='bold', fontsize=label_fontsize)
             ax_right.tick_params(axis='x', which='major', labelsize=tick_fontsize)
         else:
             ax_right.tick_params(axis='x', which='major', labelbottom=False)
-        ax_right.tick_params(axis='y', which='major', labelleft=False)
+        ax_right.tick_params(axis='y', which='major', labelleft=False, labelsize=tick_fontsize)
         # Mirror the x-axis limits (symmetric reflection about y-axis)
         source_x = sources[0][0].item()
         receiver_x = receivers[0][0][0].item()
@@ -733,7 +740,6 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         y_max = receiver_heights_arr.max() + 0.1
         ax_right.set_ylim(y_min, y_max)
         ax_right.grid(True, alpha=0.3, linestyle='--')
-        ax_right.set_facecolor('#f8f9fa')
         
         # Negate x-tick labels to show positive values on right side
         if row_idx == n_times - 1:  # Only on bottom row where labels are shown
@@ -743,7 +749,7 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     
     # Overall title
     fig.suptitle(f'Temporal Evolution: Ground Truth ← Projections → {title}',
-                 fontweight='bold', fontsize=title_fontsize + 2, y=0.995)
+                 fontweight='bold', fontsize=_FS_SUPTITLE, y=0.995)
     
     plt.tight_layout()
     
@@ -1999,13 +2005,15 @@ def plot_sinogram(proj_data, t, receivers, title=None, filename=None):
     )
 
     cbar = fig.colorbar(im, ax=ax, pad=0.02)
-    cbar.set_label('Projection intensity')
+    cbar.set_label('Projection intensity', fontsize=_FS_CBAR)
+    cbar.ax.tick_params(labelsize=_FS_CBAR_TICK)
 
-    ax.set_xlabel(r'Time $t$ (s)')
-    ax.set_ylabel(r'Detector position $y_r$ (m)')
+    ax.set_xlabel(r'Time $t$ (s)', fontsize=_FS_LABEL)
+    ax.set_ylabel(r'Receiver height (m)', fontsize=_FS_LABEL)
+    ax.tick_params(axis='both', which='major', labelsize=_FS_TICK)
 
     if title is not None:
-        ax.set_title(title, fontweight='bold')
+        ax.set_title(title, fontweight='bold', fontsize=_FS_TITLE)
 
     plt.tight_layout()
     if filename:
@@ -2042,6 +2050,7 @@ def plot_projection_modes(
     component_labels=None,
     title=None,
     filename=None,
+    t_range=None,
 ):
     """
     Projection-modes figure: snapshot panels (left) + modes-vs-time (right).
@@ -2125,9 +2134,10 @@ def plot_projection_modes(
     # Defaults
     # ------------------------------------------------------------------
     if time_snapshot_indices is None:
-        time_snapshot_indices = list(
-            np.round(np.linspace(1, n_times * 0.75, 4)).astype(int)
-        )
+        # time_snapshot_indices = list(
+            # np.round(np.linspace(1, n_times * 0.75, 4)).astype(int)
+        # )
+        time_snapshot_indices = [ 80, 90, 100, 110 ]
     if len(time_snapshot_indices) != 4:
         raise ValueError("time_snapshot_indices must contain exactly 4 indices.")
 
@@ -2192,26 +2202,19 @@ def plot_projection_modes(
 
         ax.set_xlim(y_min, y_max)
         ax.set_ylim(-0.02 * y_max_global, y_max_global)
-        ax.set_title(f'$t = {t_val:.3f}$ s', fontweight='bold')
-        ax.set_facecolor('#f8f9fa')
+        ax.set_title(f'$t = {t_val:.3f}$ s', fontweight='bold', fontsize=_FS_TITLE)
         ax.grid(True, lw=0.4, alpha=0.4)
+        ax.tick_params(axis='both', which='major', labelsize=_FS_TICK)
         if col >= 2:
-            ax.set_xlabel(r'Detector position $y_r$ (m)')
+            ax.set_xlabel(r'Receiver height (m)', fontsize=_FS_LABEL)
         if col % 2 == 0:
-            ax.set_ylabel('Projection intensity')
+            ax.set_ylabel('Projection intensity', fontsize=_FS_LABEL)
+        if col < 2:           # top row: suppress x-tick labels
+            ax.tick_params(labelbottom=False)
+        if col % 2 == 1:      # right column: suppress y-tick labels
+            ax.tick_params(labelleft=False)
 
-    # Legend on first panel only
-    # if indiv_fl:
-        # mix_handle = Line2D([0], [0], color='black', lw=2.2, label='Mixture')
-        # indiv_handles = [
-            # Line2D([0], [0], color=component_colors[k], lw=1.8,
-                #    label=component_labels[k])
-            # for k in range(K)
-        # ]
-        # snap_axes[0].legend(handles=[mix_handle] + indiv_handles,
-                            # fontsize=8, loc='upper left')
-    # else:
-    [snap_ax.legend(fontsize=8, loc='upper left') for snap_ax in snap_axes]
+    [snap_ax.legend(fontsize=_FS_LEGEND, loc='upper left') for snap_ax in snap_axes]
 
     # ------------------------------------------------------------------
     # Modes-vs-time panel
@@ -2232,35 +2235,37 @@ def plot_projection_modes(
             color=color, zorder=5 if n_t in snap_set else 4,
         )
 
-    ax_modes.set_xlabel(r'Time $t$ (s)')
-    ax_modes.set_ylabel(r'Detector position $y_r$ (m)')
+    ax_modes.set_xlabel(r'Time $t$ (s)', fontsize=_FS_LABEL)
+    ax_modes.set_ylabel(r'Receiver height (m)', fontsize=_FS_LABEL)
     ax_modes.set_title(
-        'Mixture Modes vs. Time\n'
-        '(snapshot times colour-coded to match left panels)',
+        'Mixture Modes vs. Time',
         fontweight='bold',
+        fontsize=_FS_TITLE,
     )
-    ax_modes.set_xlim(t_np[0], t_np[-1])
+    ax_modes.tick_params(axis='both', which='major', labelsize=_FS_TICK)
+    t_lo = t_range[0] if t_range is not None else t_np[0]
+    t_hi = t_range[1] if t_range is not None else t_np[-1]
+    ax_modes.set_xlim(t_lo, t_hi)
     ax_modes.set_ylim(y_min - 0.05 * (y_max - y_min),
                       y_max + 0.05 * (y_max - y_min))
-    ax_modes.set_facecolor('#f8f9fa')
     ax_modes.grid(True, lw=0.4, alpha=0.4)
 
     # Right-panel legend
     legend_handles = [
-        Line2D([0], [0], marker='o', color='black', lw=0, ms=5,
+        Line2D([0], [0], marker='o', color='black', lw=0, ms=7,
                label='Mixture modes'),
     ] + [
         Line2D([0], [0], marker='o', color=panel_accent_colors[i], lw=0,
                ms=7, label=f'$t = {t_np[time_snapshot_indices[i]]:.3f}$ s')
         for i in range(4)
     ]
-    ax_modes.legend(handles=legend_handles, fontsize=8, loc='best')
+    ax_modes.legend(handles=legend_handles, fontsize=_FS_LEGEND, loc='best')
 
     # ------------------------------------------------------------------
     # Figure title and save
     # ------------------------------------------------------------------
     if title is not None:
-        fig.suptitle(title, fontweight='bold')
+        fig.suptitle(title, fontweight='bold', fontsize=_FS_SUPTITLE)
 
     plt.tight_layout()
     if filename:
