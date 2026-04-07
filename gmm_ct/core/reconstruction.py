@@ -25,10 +25,6 @@ from .solvers import NewtonRaphsonLBFGS
 
 logger = logging.getLogger(__name__)
 
-from .forward_model import ForwardModelMixin
-from .initialization import InitializationMixin
-from .solvers import NewtonRaphsonLBFGS
-
 
 class GMM_reco(ForwardModelMixin, InitializationMixin):
     """
