@@ -17,13 +17,12 @@ The reconstruction proceeds in four stages:
 
 | Stage | What is optimised | Method | Loss |
 |---|---|---|---|
-| **1. Trajectory** | Initial velocities $v_0$ | Multi-start L-BFGS (up to 1 500 iters) | L2 on peak receiver heights, with Hungarian assignment |
-| **1.5. Velocity refinement** | $v_0$ (fine-tune) | L-BFGS root-finding on analytic derivative | Closed-form isotropic projection derivative |
-| **2. Joint morphology** | $\alpha$, $U_{\text{skew}}$, $\omega$ | Multi-start L-BFGS (up to 1 000 iters) | Smooth L1 (Huber, $\beta{=}0.3$) on full projections |
-| **3. Grid search** | $\omega$ | Brute-force grid ($\pm 3$ Hz, $0.1$ Hz steps) | Smooth L1 |
-| **4. Final polish** | $\alpha$, $U_{\text{skew}}$, $\omega$ | L-BFGS (200 iters) | Smooth L1 |
+| **1. Trajectory** | Initial velocities $v_0$ | Multi-start L-BFGS (up to 1 500 iters) + Newton–Raphson refinement | L2 on peak receiver heights, Hungarian assignment |
+| **2. ω initialization** | Angular velocities $\omega$ | Per-Gaussian residual-sinogram grid search (200 candidates) | L2 on residual sinogram |
+| **3. α initialization** | Attenuation coefficients $\alpha$ | Non-negative least squares (NNLS) | Closed-form |
+| **4. Joint optimization** | $\alpha$, $U_{\text{skew}}$, $\omega$ | Multi-start L-BFGS (up to 1 000 iters) | Smooth L1 (Huber) on full projections |
 
-**Physical model:** Each Gaussian follows a ballistic trajectory $\mu_k(t) = x_0 + v_0\,t + \tfrac{1}{2}\,a_0\,t^2$ with 2D rotation $R(2\pi\omega t)$. Projections are computed via a closed-form X-ray transform of the rotated Gaussian. Stage 1 decouples trajectory from rotation by using isotropic Gaussians; Stages 2–4 then recover the full anisotropic shape and rotation.
+**Physical model:** Each Gaussian follows a ballistic trajectory $\mu_k(t) = x_0 + v_0\,t + \tfrac{1}{2}\,a_0\,t^2$ with in-plane rotation $R(2\pi\omega t)$. Projections are computed via a closed-form X-ray transform of the rotated Gaussian. Stage 1 decouples trajectory estimation from morphology by using isotropic Gaussians; Stages 2–4 then recover angular velocity, attenuation, and anisotropic shape.
 
 ## Quick Start
 

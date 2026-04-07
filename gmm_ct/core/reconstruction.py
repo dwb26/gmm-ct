@@ -194,6 +194,18 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
         """
         Fit GMM parameters via the 4-stage optimization pipeline.
 
+        Stages
+        ------
+        1. Trajectory optimization  — multi-start L-BFGS on peak receiver
+           heights (Hungarian assignment), followed by Newton–Raphson velocity
+           refinement.
+        2. ω initialization  — per-Gaussian residual-sinogram grid search to
+           seed angular velocities.
+        3. α initialization  — non-negative least squares (NNLS) to seed
+           attenuation coefficients.
+        4. Joint optimization  — multi-start L-BFGS on full projections
+           (Huber loss) to jointly refine α, U_skew, and ω.
+
         Parameters
         ----------
         proj_data : list of torch.Tensor
