@@ -69,16 +69,7 @@ gmm-ct = "gmm_ct.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["gmm_ct*"]
-exclude = ["tests*", "experiments*", "docs*"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = [
-    "--verbose",
-]
+exclude = ["experiments*", "docs*"]
 
 [tool.black]
 line-length = 100

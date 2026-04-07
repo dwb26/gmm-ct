@@ -163,9 +163,6 @@ gmm-ct/
 │   ├── reconstruct.py            # Standalone script (generate + reconstruct)
 │   ├── run_experiments.py        # Batch experiment runner (N-sweep, seeds)
 │   └── analyse.py                # Load results, compute errors, plot
-├── tests/
-│   ├── conftest.py               # Shared fixtures
-│   └── unit/                     # Unit tests (20 tests)
 ├── experiments/
 │   ├── demos/                    # Demo & verification scripts
 │   ├── notebooks/                # Exploratory Jupyter notebooks
@@ -221,20 +218,6 @@ from gmm_ct import load_reconstruct_config, run_reconstruction  # YAML workflow
 - dtaidistance >= 2.3.0
 - pytorch-minimize >= 0.0.2
 - PyYAML >= 6.0
-
-## Testing
-
-```bash
-# Run the full test suite
-python -m pytest tests/unit/
-
-# Run a specific test
-python -m pytest tests/unit/test_dtw_omega.py -v
-```
-
-Note: some tests are compute-intensive (DTW smoothness, efficiency comparisons) and may take several minutes on CPU.
-
-Tests cover: rotation correctness, ω estimation (spectral + model-fit), peak inflection timing, trajectory refinement, DTW variants, and isotropic baseline.
 
 ## Development
 
