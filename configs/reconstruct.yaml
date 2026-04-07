@@ -10,7 +10,8 @@
 
 # --- Input Data -----------------------------------------------------------
 data:
-  projections: data/simulated/20260310_132235_seed3_N5/projections.pt
+  projections: data/simulated/20260316_193717_seed9_N5/projections.pt
+  # projections: data/simulated/20260319_200920_seed13_N9/projections.pt
   # For .pt files: expects dict with keys "projections" and "times"
   # For .npy files: expects a companion times.npy in the same directory
 

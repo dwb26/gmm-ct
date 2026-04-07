@@ -1,13 +1,12 @@
-"""
-Helper utilities for GMM CT reconstruction.
+"""Helper utilities for GMM-CT reconstruction."""
 
-This module contains miscellaneous helper functions including random seed management,
-parameter export, and other utility operations.
-"""
-
-import torch
-import numpy as np
+import logging
 from datetime import datetime
+
+import numpy as np
+import torch
+
+logger = logging.getLogger(__name__)
 
 
 def set_random_seeds(seed=42):
@@ -202,4 +201,4 @@ def export_parameters(theta_dict, filename, title="GMM Parameters", theta_true=N
                         if error_values and i < len(error_values):
                             f.write(f"**Absolute Error (Frobenius Norm):** {error_values[i]:.4f}\n\n")
     
-    print(f"✓ Parameters successfully exported to Markdown: {filename}")
+    logger.info("Parameters exported to %s", filename)

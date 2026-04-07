@@ -59,10 +59,9 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/gmm-ct"
-Documentation = "https://gmm-ct.readthedocs.io"
-Repository = "https://github.com/yourusername/gmm-ct"
-"Bug Tracker" = "https://github.com/yourusername/gmm-ct/issues"
+Homepage = "https://github.com/dwb26/gmm-ct"
+Repository = "https://github.com/dwb26/gmm-ct"
+"Bug Tracker" = "https://github.com/dwb26/gmm-ct/issues"
 
 [project.scripts]
 gmm-ct = "gmm_ct.cli:main"

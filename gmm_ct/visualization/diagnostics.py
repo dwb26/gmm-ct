@@ -1,14 +1,13 @@
-"""
-Diagnostic plotting functions for GMM-CT reconstruction.
+"""Diagnostic plotting functions for GMM-CT reconstruction."""
 
-Standalone plotting functions for inspecting trajectory estimation, peak
-detection, and assignment results during the reconstruction pipeline.
-"""
+import logging
 
-import matplotlib.pyplot as plt
 import matplotlib.cm as cm
-import torch
+import matplotlib.pyplot as plt
 import numpy as np
+import torch
+
+logger = logging.getLogger(__name__)
 
 # Default font sizes for diagnostic plots — kept in sync with publication._FS_*
 _LABEL_FONTSIZE = 13
@@ -100,9 +99,9 @@ def plot_heights_by_assignment(model, true_data=False):
     ax.set_xlabel('Time', fontsize=_LABEL_FONTSIZE)
 
     if true_data:
-        ax.set_ylabel('True Receiver Heights', fontsize=_TITLE_FONTSIZE)
+        ax.set_ylabel('True detector heights', fontsize=_TITLE_FONTSIZE)
     else:
-        ax.set_ylabel('Assigned Receiver Heights', fontsize=_LABEL_FONTSIZE)
+        ax.set_ylabel('Assigned detector heights', fontsize=_LABEL_FONTSIZE)
 
     suffix = '_true_data' if true_data else ''
     filename = (
@@ -277,7 +276,7 @@ def plot_gmm_and_projections(model, res, n_gmm_times=8, theta_true=None):
         is used to draw the true GMM; otherwise centroid markers are used.
     """
     if model.d != 2:
-        print("plot_gmm_and_projections currently supports 2-D only — skipping.")
+        logger.debug("plot_gmm_and_projections currently supports 2-D only — skipping.")
         return
 
     from ..visualization.publication import (
@@ -375,7 +374,7 @@ def plot_gmm_and_projections(model, res, n_gmm_times=8, theta_true=None):
 
     ax.set_title('True detected peaks', fontsize=_TITLE_FONTSIZE)
     ax.set_xlabel('Time', fontsize=_LABEL_FONTSIZE)
-    ax.set_ylabel('Receiver height', fontsize=_LABEL_FONTSIZE)
+    ax.set_ylabel('Detector height', fontsize=_LABEL_FONTSIZE)
     ax.tick_params(axis='both', which='major', labelsize=_TICK_FONTSIZE)
     ax.legend(fontsize=13, framealpha=0.9, ncol=max(1, model.N // 3))
     ax.grid(True, alpha=0.3, linestyle='--')
@@ -438,8 +437,15 @@ def plot_trajectory_fitting(model, res):
     fig, axes = plt.subplots(1, 2, figsize=(20, 8), sharey=True,
                              gridspec_kw={'wspace': 0.05})
 
+    # ── Initial trajectory curves (for left panel overlay) ────────────────
+    init_theta = {'v0s': model.theta_dict_init['v0s']}
+    for key in ('x0s', 'a0s', 'omegas', 'alphas', 'U_skews'):
+        if key in full_theta:
+            init_theta[key] = full_theta[key]
+    init_r_maxs_list = model.map_velocities_to_maximising_receivers(init_theta)
+
     # ═══════════════════════════════════════════════════════════════════════
-    # Panel 1 — Raw detected peaks (all black)
+    # Panel 1 — Raw detected peaks + initial trajectory overlays
     # ═══════════════════════════════════════════════════════════════════════
     ax = axes[0]
 
@@ -449,10 +455,18 @@ def plot_trajectory_fitting(model, res):
                        [h.item() for h in heights],
                        s=12, color='black', alpha=0.7, zorder=5)
 
-    ax.set_title('Detected peaks (raw)', fontsize=_TITLE_FONTSIZE)
+    for k in range(model.N):
+        init_pred_h = init_r_maxs_list[k][:, 1].detach().cpu().numpy()
+        mask = (init_pred_h >= min_rcvr_h) & (init_pred_h <= max_rcvr_h)
+        ax.plot(t_all[mask], init_pred_h[mask],
+                color=gauss_colors[k], lw=1,
+                label=f'$\\rho_{{{k+1}}}^{{(0)}}$', zorder=3)
+
+    ax.set_title('Detected peaks + initial trajectories', fontsize=_TITLE_FONTSIZE)
     ax.set_xlabel('Time (s)', fontsize=_LABEL_FONTSIZE)
-    ax.set_ylabel('Receiver height (m)', fontsize=_LABEL_FONTSIZE)
+    ax.set_ylabel('Detector height', fontsize=_LABEL_FONTSIZE)
     ax.tick_params(axis='both', which='major', labelsize=_TICK_FONTSIZE)
+    ax.legend(fontsize=13, framealpha=0.9, ncol=max(1, model.N // 3))
     ax.grid(True, alpha=0.3, linestyle='--')
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -492,9 +506,7 @@ def plot_trajectory_fitting(model, res):
     ax.legend(fontsize=13, framealpha=0.9, ncol=max(1, model.N // 3))
     ax.grid(True, alpha=0.3, linestyle='--')
 
-    fig.suptitle('Trajectory optimization — fitting result',
-                 fontsize=_TITLE_FONTSIZE + 2, fontweight='bold', y=1.01)
-    plt.tight_layout()
+    plt.tight_layout(pad=0.4)
 
     filename = model.output_dir / f'trajectory_fitting_K{model.N}.png'
     plt.savefig(filename, dpi=200, bbox_inches='tight')

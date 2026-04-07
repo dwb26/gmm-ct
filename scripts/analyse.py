@@ -85,7 +85,7 @@ def main():
     analyse_results(
         theta_true=data["theta_true"],
         theta_est=data["theta_est"],
-        theta_init=data["theta_init"],
+        theta_init=data.get("theta_init"),  # post-1.5b snapshot (None for old files)
         proj_data=data["proj_data"],
         t=data["t"],
         sources=data["sources"],

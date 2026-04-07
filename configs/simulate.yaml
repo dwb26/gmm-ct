@@ -38,7 +38,7 @@ physics:
 
 # --- Simulation Settings -------------------------------------------------
 simulation:
-  seed: 1                           # Random seed for reproducibility
+  seed: 9                           # Random seed for reproducibility
   n_projections: 150                  # Number of time steps
   duration: 1.5                      # Time window (seconds)
   initial_velocity: [0.75, 0.5]     # Base initial velocity (perturbations added per Gaussian)

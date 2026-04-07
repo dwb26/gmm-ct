@@ -9,14 +9,16 @@ Provides two main commands:
 ``gmm-ct reconstruct``
     Run reconstruction on observed (or simulated) projection data.
 
-Both commands take a ``--config`` flag pointing to a YAML file that
-describes the geometry, physics, and algorithm settings.  See
-``configs/`` for annotated examples.
+Both commands take a ``--config`` flag pointing to a YAML file.
+See ``configs/`` for annotated examples.
 """
 
 import argparse
+import logging
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _add_common_args(parser: argparse.ArgumentParser):
@@ -126,7 +128,7 @@ def _run_simulate(args) -> int:
     if args.config is None:
         cfg_path = Path("configs/simulate.yaml")
         cfg = load_simulate_config(cfg_path)
-        print(f"No config specified, using default: {cfg_path}")
+        logger.info("No config specified, using default: %s", cfg_path)
     else:
         cfg = load_simulate_config(args.config)
 
@@ -138,14 +140,8 @@ def _run_simulate(args) -> int:
     if args.seed is not None:
         cfg.simulation.seed = args.seed
 
-    print("=" * 50)
-    print("GMM-CT  –  Simulate")
-    print("=" * 50)
-    print(f"Config : {args.config}")
-    print(f"N      : {cfg.n_gaussians}")
-    print(f"Seed   : {cfg.simulation.seed}")
-    print(f"Output : {cfg.output.directory}")
-    print()
+    logger.info("GMM-CT Simulate | N=%d, seed=%d, output=%s",
+                cfg.n_gaussians, cfg.simulation.seed, cfg.output.directory)
 
     run_simulation(cfg)
     return 0
@@ -163,20 +159,15 @@ def _run_reconstruct(args) -> int:
     if args.output_dir:
         cfg.output.directory = Path(args.output_dir)
     if args.data:
-        cfg.data_path = args.data; print(f"Overriding data path: {cfg.data_path}")
+        cfg.data_path = args.data
+        logger.info("Overriding data path: %s", cfg.data_path)
     if args.skip_analysis:
         cfg.analysis.enabled = False
     if args.skip_animations:
         cfg.analysis.skip_animations = True
 
-    print("=" * 50)
-    print("GMM-CT  –  Reconstruct")
-    print("=" * 50)
-    print(f"Config : {args.config}")
-    print(f"Data   : {cfg.data_path}")
-    print(f"N      : {cfg.n_gaussians}")
-    print(f"Output : {cfg.output.directory}")
-    print()
+    logger.info("GMM-CT Reconstruct | data=%s, N=%d, output=%s",
+                cfg.data_path, cfg.n_gaussians, cfg.output.directory)
 
     run_reconstruction(cfg)
     return 0

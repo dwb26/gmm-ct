@@ -59,7 +59,7 @@ def run_reconstruction(args):
     print(f"Seed:   {args.seed}")
 
     # --- Hyperparameters ---
-    # d = 2
+    d = 2
     N = args.N
     omega_min = args.omega_min
     omega_max = omega_min + args.omega_range

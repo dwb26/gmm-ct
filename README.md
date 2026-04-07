@@ -118,7 +118,7 @@ examples.  For real tomography data, point `data.projections` to your
 measurements (`.pt` or `.npy`) and provide the matching geometry &
 physics.
 
-You can also use the legacy scripts directly:
+Standalone scripts are also available:
 
 ```bash
 # Run reconstruction → saves results.pt
@@ -160,7 +160,7 @@ gmm-ct/
 │   ├── simulate.yaml             # Example simulation config
 │   └── reconstruct.yaml          # Example reconstruction config
 ├── scripts/
-│   ├── reconstruct.py            # Legacy script (generate + reconstruct)
+│   ├── reconstruct.py            # Standalone script (generate + reconstruct)
 │   ├── run_experiments.py        # Batch experiment runner (N-sweep, seeds)
 │   └── analyse.py                # Load results, compute errors, plot
 ├── tests/
@@ -180,8 +180,7 @@ gmm-ct/
 ├── data/
 │   ├── simulated/                # Raw projection data (per experiment)
 │   └── results/                  # Reconstruction outputs + batch_summary.csv
-├── pyproject.toml                # Build config, deps, tool settings
-└── requirements.txt
+└── pyproject.toml                # Build config, deps, tool settings
 ```
 
 ## Key Modules

@@ -1,16 +1,19 @@
-"""
-    Plotting and animation codes.
-"""
+"""Animation utilities for GMM-CT reconstruction."""
 
+import logging
+
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
+import numpy as np
 import seaborn as sns
 import torch
-import numpy as np
 from matplotlib.animation import FuncAnimation
-import matplotlib.cm as cm
-from matplotlib.patches import Ellipse, Circle
-from ..core.reconstruction import GMM_reco
+from matplotlib.patches import Circle, Ellipse
 from torchmin import minimize
+
+from ..core.reconstruction import GMM_reco
+
+logger = logging.getLogger(__name__)
 
 # Set seeds for reproducibility
 RANDOM_SEED = 42
@@ -775,10 +778,10 @@ def save_GMM_evolution_animation(theta_hat, theta_true, d, K, sources, rcvrs, t,
             # Default to gif
             anim.save(filename + '.gif', writer='pillow', fps=fps)
         
-        print(f"Evolution animation saved as {filename}")
-        print(f"- Shows {len(theta_hat)} optimization iterations")
-        print("- True parameters shown faded in background")
-        print("- Current iteration parameters highlighted")
+        logger.info("Evolution animation saved as {filename}")
+        logger.info("- Shows {len(theta_hat)} optimization iterations")
+        logger.info("- True parameters shown faded in background")
+        logger.info("- Current iteration parameters highlighted")
         return anim
     elif d == 3:
         anim_yz, anim_xy = animate_GMM_evolution(theta_hat, theta_true, d, K, sources, rcvrs, t,
@@ -798,10 +801,10 @@ def save_GMM_evolution_animation(theta_hat, theta_true, d, K, sources, rcvrs, t,
             anim_xy.save(filename + '_xy.gif', writer='pillow', fps=fps)
         
         base_name = filename.replace('.gif', '').replace('.mp4', '')
-        print(f"Evolution animations saved as {base_name}_yz and {base_name}_xy")
-        print(f"- Shows {len(theta_hat)} optimization iterations")
-        print("- True parameters shown faded in background")
-        print("- Current iteration parameters highlighted")
+        logger.info("Evolution animations saved as {base_name}_yz and {base_name}_xy")
+        logger.info("- Shows {len(theta_hat)} optimization iterations")
+        logger.info("- True parameters shown faded in background")
+        logger.info("- Current iteration parameters highlighted")
         return anim_yz, anim_xy
     
 
@@ -1223,11 +1226,11 @@ def save_GMM_animation(theta_true, d, K, sources, rcvrs, t, projs_by_source,
             # Default to gif
             anim.save(filename + '.gif', writer='pillow', fps=fps)
     
-        print(f"Animation saved as {filename}")
+        logger.info("Animation saved as {filename}")
         if show_estimates and theta_hat is not None:
-            print("- Animation includes both true and estimated GMM parameters")
-            print("- True parameters shown with solid lines")
-            print("- Estimated parameters shown with dashed lines")
+            logger.info("- Animation includes both true and estimated GMM parameters")
+            logger.info("- True parameters shown with solid lines")
+            logger.info("- Estimated parameters shown with dashed lines")
         return anim
     elif d == 3:
         anim_yz, anim_xy = animate_GMM_motion(theta_true, d, K, sources, rcvrs, t, projs_by_source, 
@@ -1248,11 +1251,11 @@ def save_GMM_animation(theta_true, d, K, sources, rcvrs, t, projs_by_source,
             anim_xy.save(filename + '_xy.gif', writer='pillow', fps=fps)
         
         base_name = filename.replace('.gif', '').replace('.mp4', '')
-        print(f"Animations saved as {base_name}_yz and {base_name}_xy")
+        logger.info("Animations saved as {base_name}_yz and {base_name}_xy")
         if show_estimates and theta_hat is not None:
-            print("- Animations include both true and estimated GMM parameters")
-            print("- True parameters shown with solid lines")
-            print("- Estimated parameters shown with dashed lines")
+            logger.info("- Animations include both true and estimated GMM parameters")
+            logger.info("- True parameters shown with solid lines")
+            logger.info("- Estimated parameters shown with dashed lines")
         return anim_yz, anim_xy
 
 
@@ -1334,7 +1337,7 @@ def animate_projection_comparison(proj_data, sim_projs, t, sources, receivers, d
             if true_proj_frame.ndim > 1:
                 true_proj_frame = true_proj_frame.flatten()
             if len(true_proj_frame) != len(y_positions):
-                print(f"Warning: true_proj_frame shape {true_proj_frame.shape} doesn't match y_positions shape {y_positions.shape}")
+                logger.warning("true_proj_frame shape %s doesn't match y_positions shape %s", true_proj_frame.shape, y_positions.shape)
                 return
                 
             # Sort receiver positions from lowest to highest for plotting
@@ -1378,14 +1381,14 @@ def animate_projection_comparison(proj_data, sim_projs, t, sources, receivers, d
                 elif sim_data.ndim == 1:
                     sim_proj_frame = sim_data
                 else:
-                    print(f"Warning: Unexpected sim_data dimensions: {sim_data.shape}")
+                    logger.warning("Unexpected sim_data dimensions: %s", sim_data.shape)
                     return
                 
                 # Ensure sim_proj_frame is 1D with correct length
                 if sim_proj_frame.ndim > 1:
                     sim_proj_frame = sim_proj_frame.flatten()
                 if hasattr(sim_proj_frame, '__len__') and len(sim_proj_frame) != len(y_positions):
-                    print(f"Warning: sim_proj_frame shape {sim_proj_frame.shape} doesn't match y_positions shape {y_positions.shape}")
+                    logger.warning("sim_proj_frame shape %s doesn't match y_positions shape %s", sim_proj_frame.shape, y_positions.shape)
                     return
                     
                 # Sort simulated projection data to match receiver position ordering
@@ -1509,11 +1512,11 @@ def save_projection_comparison_animation(proj_data, sim_projs, t, sources, recei
         # Default to gif
         anim.save(filename + '.gif', writer='pillow', fps=fps)
     
-    print(f"📽️  Projection comparison animation saved as {filename}")
-    print(f"   - Continuous animation: All optimization iterations from start to finish")
-    print(f"   - Left: True projections, Right: Current iteration projections")
-    print(f"   - Total frames: {len(sim_projs) * len(t)} ({len(sim_projs)} iterations × {len(t)} time points)")
-    print(f"   - FPS: {fps}")
+    logger.info("📽️  Projection comparison animation saved as {filename}")
+    logger.info("   - Continuous animation: All optimization iterations from start to finish")
+    logger.info("   - Left: True projections, Right: Current iteration projections")
+    logger.info("   - Total frames: {len(sim_projs) * len(t)} ({len(sim_projs)} iterations × {len(t)} time points)")
+    logger.info("   - FPS: {fps}")
     
     return anim
 
@@ -1787,13 +1790,13 @@ def save_GMM_with_projection_comparison(theta_true, d, K, sources, rcvrs, t, pro
         # Default to gif
         anim.save(filename + '.gif', writer='pillow', fps=fps)
     
-    print(f"📽️  Combined GMM and projection animation saved as {filename}")
-    print(f"   - Top row: GMM motion (left) and projection data (right)")
-    print(f"   - Bottom row: Projection comparison across iterations")
-    print(f"   - All synchronized to the same time frames")
+    logger.info("📽️  Combined GMM and projection animation saved as {filename}")
+    logger.info("   - Top row: GMM motion (left) and projection data (right)")
+    logger.info("   - Bottom row: Projection comparison across iterations")
+    logger.info("   - All synchronized to the same time frames")
     if show_estimates and theta_hat is not None:
-        print("   - Animation includes both true and estimated GMM parameters")
-        print("   - True parameters shown with solid lines, estimated with dashed lines")
+        logger.info("   - Animation includes both true and estimated GMM parameters")
+        logger.info("   - True parameters shown with solid lines, estimated with dashed lines")
     
     return anim
 
@@ -2143,12 +2146,12 @@ def save_optimization_stages_animation(theta_true, theta_init, theta_after_traj,
         # Default to gif
         anim.save(filename + '.gif', writer='pillow', fps=fps)
     
-    print(f"📽️  Optimization stages animation saved as {filename}")
-    print(f"   - Left: GMM with true (solid) and final estimate (dashed)")
-    print(f"   - Right top: Initial projections (before trajectory opt)")
-    print(f"   - Right middle: After trajectory optimization")
-    print(f"   - Right bottom: Final projections (after all optimization)")
-    print(f"   - All synchronized to the same time frames")
+    logger.info("📽️  Optimization stages animation saved as {filename}")
+    logger.info("   - Left: GMM with true (solid) and final estimate (dashed)")
+    logger.info("   - Right top: Initial projections (before trajectory opt)")
+    logger.info("   - Right middle: After trajectory optimization")
+    logger.info("   - Right bottom: Final projections (after all optimization)")
+    logger.info("   - All synchronized to the same time frames")
     
     return anim
 

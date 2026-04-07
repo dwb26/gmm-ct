@@ -1,14 +1,12 @@
-"""
-Parameter initialization for GMM-CT reconstruction.
+"""Parameter initialization for GMM-CT reconstruction."""
 
-Provides methods for initializing all GMM parameters including attenuation
-coefficients, covariance structures, rotation velocities, and initial
-velocities via peak detection.
-"""
+import logging
 
 import torch
 
 from ..estimation.peak_analysis import PeakData
+
+logger = logging.getLogger(__name__)
 
 
 class InitializationMixin:
@@ -40,9 +38,9 @@ class InitializationMixin:
             Complete parameter dictionary with all initialized values.
         """
         alphas = self.initialize_attenuation_coefficients()
-        U_skews = self.initialize_U_skews()
         omegas = self.initialize_rotation_velocities()
         v0s = self.initialize_initial_velocities(t, proj_data)
+        U_skews = self.initialize_U_skews(v0s)
 
         return {
             'alphas': alphas,
@@ -55,7 +53,7 @@ class InitializationMixin:
 
     def initialize_attenuation_coefficients(self):
         """
-        Initialize attenuation coefficients in range [10, 15].
+        Initialize attenuation coefficients to the midpoint of the prior range [10, 15].
 
         Returns
         -------
@@ -63,7 +61,7 @@ class InitializationMixin:
             Alpha values, one per Gaussian.
         """
         return [
-            10.0 + torch.rand(size=(1,), dtype=torch.float64, device=self.device) * 5.0
+            torch.tensor([12.5], dtype=torch.float64, device=self.device)
             for _ in range(self.N)
         ]
 
@@ -97,7 +95,6 @@ class InitializationMixin:
         proj_data_array = proj_data[0] if isinstance(proj_data, list) else proj_data
         receivers = self.receivers[0]
 
-        # print(f"\nDetecting peaks in {len(t)} time points...")
         self._detect_all_peaks(proj_data_array, receivers, t)
 
         self.peak_data.finalize_detections()
@@ -208,51 +205,57 @@ class InitializationMixin:
     # Covariance and rotation initialization
     # ------------------------------------------------------------------
 
-    def initialize_U_skews(self):
+    def initialize_U_skews(self, v0s):
         """
-        Initialize covariance structures as isotropic (scaled identity).
+        Initialize anisotropic covariance structures aligned with initial velocities.
 
-        Isotropy decouples trajectory estimation from morphology in Phase 1.
-        Phase 2 discovers anisotropy when fitting rotation + morphology.
+        Delegates to :meth:`initialize_anisotropic_U_skews` so that morphology
+        is set once, before Stage 1 trajectory optimization begins.
+
+        Parameters
+        ----------
+        v0s : list of torch.Tensor
+            Initial velocity vectors, one per Gaussian.
 
         Returns
         -------
         list of torch.Tensor
-            Isotropic U_skew matrices, one per Gaussian.
+            Anisotropic U_skew matrices, one per Gaussian.
         """
-        return [
-            25.0 * torch.eye(self.d, dtype=torch.float64, device=self.device)
-            for _ in range(self.N)
-        ]
+        return self.initialize_anisotropic_U_skews(v0s)
 
     def initialize_rotation_velocities(self):
         """
-        Initialize rotation velocities to midpoint of valid range.
+        Initialize rotation velocities to zero.
 
-        This is a placeholder; Phase 2 optimization replaces these values.
+        A zero angular velocity is the simplest uninformative starting point;
+        Stage 1.5a replaces these with grid-search estimates.
 
         Returns
         -------
         list of torch.Tensor
         """
-        omega_mean = 0.5 * (self.omega_min + self.omega_max)
         return [
-            omega_mean * torch.ones(size=(1,), dtype=torch.float64, device=self.device)
+            torch.zeros(size=(1,), dtype=torch.float64, device=self.device)
             for _ in range(self.N)
         ]
 
-    def initialize_anisotropic_U_skews(self, v0s):
+    def initialize_anisotropic_U_skews(self, v0s, eps=1.0):
         """
         Initialize anisotropic U_skew matrices aligned with velocity direction.
 
         Creates elongated Gaussians essential for omega estimation via DTW.
         Major axis along velocity (scale 15), minor axis perpendicular (scale 30),
-        giving a 2:1 covariance ratio.
+        giving a 4:1 covariance ratio.  Upper off-diagonal entries are perturbed
+        by small Gaussian noise ~ N(0, eps^2) to aid off-diagonal recovery.
 
         Parameters
         ----------
         v0s : list of torch.Tensor
             Optimized initial velocities from Phase 1, shape ``(2,)`` each.
+        eps : float, optional
+            Standard deviation of the Gaussian perturbation applied to the
+            strictly upper-triangular entries.  Default: 1.0.
 
         Returns
         -------
@@ -280,12 +283,18 @@ class InitializationMixin:
             U_skew_k = torch.stack([
                 v_hat * major_direction_scale,
                 v_perp * minor_direction_scale,
-            ], dim=1)
+            ], dim=1).clone()
+
+            # Perturb strictly upper-triangular entries
+            if eps > 0:
+                rows, cols = torch.triu_indices(self.d, self.d, offset=1, device=self.device)
+                noise = eps * torch.randn(len(rows), dtype=torch.float64, device=self.device)
+                U_skew_k[rows, cols] = U_skew_k[rows, cols] + noise
 
             U_skews.append(U_skew_k)
 
             ratio = (minor_direction_scale / major_direction_scale) ** 2
-            print(f"  Gaussian {k}: Elongated along velocity direction "
-                  f"(covariance ratio {ratio:.1f}:1)")
+            logger.debug("  Gaussian %d: elongated along velocity (covariance ratio %.1f:1)",
+                         k, ratio)
 
         return U_skews

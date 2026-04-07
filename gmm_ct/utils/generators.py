@@ -169,37 +169,29 @@ def generate_true_param(d, K, initial_location, initial_velocity, initial_accele
 
     _max_attempts = 500
     v0s = []
-    generate = False
-    if generate:
-        for k in range(K):
-            if k == 0:
-                # First velocity: accept freely
-                v0s.append(_sample_velocity())
-                continue
-            for attempt in range(_max_attempts):
-                candidate = _sample_velocity()
-                if all(
-                    torch.norm(candidate - accepted).item() >= min_velocity_separation
-                    for accepted in v0s
-                ):
-                    v0s.append(candidate)
-                    break
-            else:
-                warnings.warn(
-                    f"Could not find a velocity for component {k} satisfying "
-                    f"min_velocity_separation={min_velocity_separation} after "
-                    f"{_max_attempts} attempts. Accepting last candidate anyway. "
-                    "Consider reducing min_velocity_separation or the number of components.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
+    for k in range(K):
+        if k == 0:
+            # First velocity: accept freely
+            v0s.append(_sample_velocity())
+            continue
+        for attempt in range(_max_attempts):
+            candidate = _sample_velocity()
+            if all(
+                torch.norm(candidate - accepted).item() >= min_velocity_separation
+                for accepted in v0s
+            ):
                 v0s.append(candidate)
-    else:
-        v0s = [torch.tensor([1.0, 1+2.0], dtype=torch.float64, device=device),
-               torch.tensor([1.5, 0+1.8], dtype=torch.float64, device=device), 
-               torch.tensor([0.8, 1+1.5], dtype=torch.float64, device=device), 
-               torch.tensor([0.75, 0+1.2], dtype=torch.float64, device=device), 
-               torch.tensor([2.0, 1+2.0], dtype=torch.float64, device=device)]
+                break
+        else:
+            warnings.warn(
+                f"Could not find a velocity for component {k} satisfying "
+                f"min_velocity_separation={min_velocity_separation} after "
+                f"{_max_attempts} attempts. Accepting last candidate anyway. "
+                "Consider reducing min_velocity_separation or the number of components.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            v0s.append(candidate)
     
     # Initial acceleration (assumed known for all Gaussians)
     a0s = [initial_acceleration.to(torch.float64) for _ in range(K)]

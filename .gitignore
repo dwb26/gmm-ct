@@ -75,6 +75,9 @@ venv.bak/
 
 # Project specific
 data/results/
+data/simulated/
+plots/
+obscured_soln_gmm_animation_frames/
 data/sample/*.npy
 data/sample/*.pt
 *.png

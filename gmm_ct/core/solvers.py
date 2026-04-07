@@ -1,11 +1,10 @@
-"""
-Numerical solvers for GMM-CT reconstruction.
+"""Numerical solvers for GMM-CT reconstruction."""
 
-Contains root-finding and optimization solvers used during the
-reconstruction pipeline.
-"""
+import logging
 
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 def NewtonRaphsonLBFGS(func, x0, *args, tol=1e-05, max_iter=100,
@@ -73,8 +72,8 @@ def NewtonRaphsonLBFGS(func, x0, *args, tol=1e-05, max_iter=100,
         return loss
 
     try:
-        print("Starting LBFGS optimization for root finding...")
-        print(f"Initial: x = {x0.data}, ||f(x)||^2 = {func(x0, *args).item()**2:.2e}")
+        logger.debug("L-BFGS root-finding: x0 = %s, ||f(x)||^2 = %.2e",
+                     x0.data, func(x0, *args).item()**2)
 
         optimizer.step(closure)
 
@@ -84,13 +83,13 @@ def NewtonRaphsonLBFGS(func, x0, *args, tol=1e-05, max_iter=100,
             if final_f_val.dim() == 0
             else torch.sum(final_f_val ** 2).item()
         )
-        print(f"Final: x = {x0.data}, ||f(x)||^2 = {final_loss:.2e}\n")
+        logger.debug("L-BFGS converged: x = %s, ||f(x)||^2 = %.2e", x0.data, final_loss)
 
     except Exception as e:
         if "does not require grad" in str(e):
-            print("ℹ️  Initial guess already optimal (residual at machine precision)")
+            logger.debug("Initial guess already optimal (residual at machine precision)")
         else:
-            print(f"❌ LBFGS optimization failed: {e}")
-        print(f"Returning current estimate: x = {x0.data}")
+            logger.warning("L-BFGS optimization failed: %s", e)
+        logger.debug("Returning current estimate: x = %s", x0.data)
 
     return x0

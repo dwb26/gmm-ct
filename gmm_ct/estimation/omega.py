@@ -1,46 +1,21 @@
 """
-FFT-based omega estimation module for GMM reconstruction.
+FFT-based omega estimation for GMM reconstruction.
 
-This module provides spectral analysis tools to directly estimate angular velocities
-from peak value time series, eliminating the need for expensive multi-start optimization.
-
-Key Principle:
---------------
-An anisotropic (elliptical) Gaussian rotating with angular velocity ω creates periodic
-oscillations in the X-ray projection peak values. Due to the 180° symmetry of ellipses,
-the oscillation frequency is 2ω (two peaks per full rotation).
-
-FFT decomposes the time-domain signal into frequency components:
-  - LOW frequencies (< 1 Hz): Trajectory effects (slow baseline drift)
-  - HIGH frequencies (~ 2ω): Rotation effects (fast oscillations)
-
-By detrending (removing trajectory baseline) and applying FFT, we can directly
-measure the dominant oscillation frequency and extract ω = frequency_peak / 2.
-
-Advantages:
------------
-1. Direct estimation - no search required (O(n log n) FFT)
-2. Robust to trajectory effects - frequencies are well-separated
-3. Handles multiple Gaussians - each creates independent frequency peak
-4. Eliminates multi-start requirement - provides good initialization
-5. Computationally cheap - replaces expensive optimization with signal processing
-
-Workflow Integration:
---------------------
-Phase 1: Fit trajectory (x₀, v₀, a₀) for each Gaussian
-Phase 1.5 (NEW): Extract peak values → FFT → Estimate ω for each Gaussian
-Phase 2: Fit morphology (U_skew, α) with ω FIXED
-Phase 3 (optional): Fine-tune ω + morphology together from good initialization
-
-Author: GitHub Copilot
-Date: 31 January 2026
+Provides spectral analysis tools to estimate angular velocities from peak
+value time series.  An anisotropic (elliptical) Gaussian rotating at
+angular velocity ω creates oscillations at frequency 2ω (due to 180°
+symmetry).  FFT decomposes the signal so that the dominant oscillation
+frequency yields ω = f_peak / 2.
 """
 
-import torch
+import logging
+
 import numpy as np
-from scipy.signal import detrend as scipy_detrend, windows
+import torch
 from scipy.fft import fft, fftfreq
-from scipy.signal import find_peaks
+from scipy.signal import detrend as scipy_detrend, find_peaks, windows
+
+logger = logging.getLogger(__name__)
 
 
 def estimate_omega_from_peak_values(peak_values, t, method='detrend_hann', 
@@ -116,7 +91,8 @@ def estimate_omega_from_peak_values(peak_values, t, method='detrend_hann',
         raise ValueError(f"peak_values and t must have same length (got {len(peak_values)} vs {len(t)})")
     
     if len(peak_values) < 50:
-        print(f"⚠ Warning: Only {len(peak_values)} time points. FFT works best with > 100 points.")
+        logger.warning("Only %d time points; FFT works best with > 100 points.",
+                       len(peak_values))
     
     # Preprocess signal
     signal = _preprocess_signal(peak_values, method)
@@ -138,7 +114,7 @@ def estimate_omega_from_peak_values(peak_values, t, method='detrend_hann',
     peaks_idx, properties = find_peaks(power_norm, prominence=0.05, distance=5)
     
     if len(peaks_idx) == 0:
-        print("⚠ Warning: No clear peaks found in spectrum. Results may be unreliable.")
+        logger.warning("No clear peaks found in spectrum. Results may be unreliable.")
         # Return midpoint of search range as fallback
         omega_fallback = (min_omega + max_omega) / 2
         return omega_fallback, 0.0, {
@@ -192,7 +168,8 @@ def estimate_omega_from_peak_values(peak_values, t, method='detrend_hann',
     
     # Select best candidate
     if len(candidates) == 0:
-        print(f"⚠ Warning: No candidates in plausible range [{min_omega}, {max_omega}] Hz")
+        logger.warning("No candidates in plausible range [%.1f, %.1f] Hz",
+                       min_omega, max_omega)
         omega_fallback = (min_omega + max_omega) / 2
         return omega_fallback, 0.0, {
             'dominant_freq': dominant_freq,
@@ -310,12 +287,10 @@ def estimate_omega_for_all_gaussians(projections_per_gaussian, t, method='detren
     confidences = []
     spectrum_infos = []
     
-    print(f"\n{'='*60}")
-    print(f"FFT-based Omega Estimation for {N} Gaussian(s)")
-    print(f"{'='*60}")
+    logger.info("FFT-based omega estimation for %d Gaussian(s)", N)
     
     for i, proj_i in enumerate(projections_per_gaussian):
-        print(f"\n--- Gaussian {i+1}/{N} ---")
+        logger.debug("Gaussian %d/%d", i + 1, N)
         
         # Extract peak values (max across receivers at each time)
         if isinstance(proj_i, torch.Tensor):
@@ -333,21 +308,19 @@ def estimate_omega_for_all_gaussians(projections_per_gaussian, t, method='detren
         confidences.append(conf_i)
         spectrum_infos.append(info_i)
         
-        # Print result
         if conf_i > 0.5:
-            quality = "✓✓ Excellent" if conf_i > 0.7 else "✓ Good"
+            quality = "excellent" if conf_i > 0.7 else "good"
         else:
-            quality = "⚠ Low confidence"
+            quality = "low confidence"
         
-        print(f"  Estimated ω = {omega_i:.4f} Hz")
-        print(f"  Confidence = {conf_i:.2f} {quality}")
+        logger.info("  Gaussian %d: ω = %.4f Hz (confidence: %.2f, %s)",
+                     i, omega_i, conf_i, quality)
         if info_i.get('dominant_freq') is not None:
-            print(f"  Dominant frequency = {info_i['dominant_freq']:.4f} Hz")
-            print(f"  Interpretation: {info_i['best_candidate']['harmonic_factor']}×ω harmonic")
+            logger.debug("  Dominant freq = %.4f Hz (%d×ω harmonic)",
+                         info_i['dominant_freq'],
+                         info_i['best_candidate']['harmonic_factor'])
     
-    print(f"\n{'='*60}")
-    print("FFT-based estimation complete!")
-    print(f"{'='*60}\n")
+    logger.info("FFT-based estimation complete")
     
     return omega_estimates, confidences, spectrum_infos
 
@@ -432,7 +405,7 @@ def plot_omega_estimation_diagnostics(peak_values, t, omega_true=None,
     
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    print(f"Diagnostic plot saved to: {output_path}")
+    logger.info("Diagnostic plot saved to: %s", output_path)
     plt.close()
 
 

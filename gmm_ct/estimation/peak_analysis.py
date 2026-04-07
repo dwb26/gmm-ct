@@ -1,12 +1,11 @@
-"""
-Data structure for organizing peak detection and assignment results.
+"""Data structure for organizing peak detection and assignment results."""
 
-This module consolidates all peak-related data that was previously scattered
-across multiple attributes in the GMM_reco class.
-"""
+import logging
 
-import torch
 import numpy as np
+import torch
+
+logger = logging.getLogger(__name__)
 
 
 class PeakData:
@@ -236,19 +235,11 @@ class PeakData:
         return len(self.assigned_times[gaussian_idx]) > 0
     
     def summary(self):
-        """Print summary statistics of detected and assigned peaks."""
-        print("\n" + "="*60)
-        print("PEAK DATA SUMMARY")
-        print("="*60)
-        print(f"Observable time points: {len(self.observable_indices)}")
-        print(f"Time points with detections: {len(self.receiver_heights_by_time)}")
-        
-        print("\nInitial Sequential Detections:")
+        """Log summary statistics of detected and assigned peaks."""
+        logger.info("Peak data: %d observable time points, %d with detections",
+                    len(self.observable_indices), len(self.receiver_heights_by_time))
         for k in range(self.N):
             n_peaks = len(self.times[k]) if isinstance(self.times[k], list) else len(self.times[k])
-            print(f"  Gaussian {k}: {n_peaks} peaks")
-        
-        print("\nFinal Optimal Assignments:")
-        for k in range(self.N):
-            print(f"  Gaussian {k}: {len(self.assigned_times[k])} assignments")
-        print("="*60 + "\n")
+            n_assigned = len(self.assigned_times[k])
+            logger.debug("  Gaussian %d: %d detections, %d assignments",
+                         k, n_peaks, n_assigned)

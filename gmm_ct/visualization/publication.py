@@ -3,15 +3,19 @@ Publication-quality plotting functions for journal manuscripts.
 Creates high-resolution, publication-ready figures with consistent styling.
 """
 
-import matplotlib.pyplot as plt
+import logging
+
 import matplotlib as mpl
+import matplotlib.cm as cm
+import matplotlib.pyplot as plt
+import numpy as np
 import seaborn as sns
 import torch
-import numpy as np
+from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Ellipse, FancyBboxPatch
 from scipy.optimize import linear_sum_assignment
-from matplotlib.gridspec import GridSpec
-import matplotlib.cm as cm
+
+logger = logging.getLogger(__name__)
 
 # Publication-quality settings
 mpl.rcParams['font.family'] = 'serif'
@@ -161,7 +165,7 @@ def save_figure(fig, filename, dpi=DPI, bbox_inches='tight'):
     """Save figure with publication settings."""
     fig.savefig(filename, dpi=dpi, bbox_inches=bbox_inches, 
                 facecolor='white', edgecolor='none')
-    print(f"✓ Saved: {filename}")
+    logger.info("✓ Saved: {filename}")
 
 
 
@@ -170,7 +174,7 @@ def save_figure(fig, filename, dpi=DPI, bbox_inches='tight'):
 '--------------------------------------------------------------------------------------------------------------------------'
 
 def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussian_indices=None,
-                                           filename=None, resolution=256):
+                                           filename=None, resolution=256, theta_init=None):
     """
     Figure 2: Individual Gaussian reconstruction accuracy comparison.
     
@@ -203,7 +207,7 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
     
     # If K > 5, select the 5 worst approximations based on image reconstruction error
     if K > 5:
-        print(f"K={K} > 5, selecting the 5 worst Gaussian approximations for plotting...")
+        logger.info("K={K} > 5, selecting the 5 worst Gaussian approximations for plotting...")
         errors = []
         device = theta_true['alphas'][0].device
 
@@ -254,7 +258,7 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
         # Get the indices of the 5 Gaussians with the highest error
         worst_indices = np.argsort(errors)[-5:]
         gaussian_indices = sorted(worst_indices)
-        print(f"Plotting worst 5 Gaussians (by MAE): {gaussian_indices}")
+        logger.info("Plotting worst 5 Gaussians (by MAE): {gaussian_indices}")
         K = 5 # We are now plotting 5 Gaussians
 
     # Select 3 most diverse Gaussians if not specified
@@ -295,17 +299,28 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
         selected.append(k)
         
         gaussian_indices = sorted(selected)
-        print(f"Auto-selected most diverse Gaussians (by geometry): {gaussian_indices}")
-        print(f"  Alphas: {[alphas[idx].item() if hasattr(alphas[idx], 'item') else alphas[idx] for idx in gaussian_indices]}")
+        logger.info("Auto-selected most diverse Gaussians (by geometry): {gaussian_indices}")
+        logger.info("  Alphas: {[alphas[idx].item() if hasattr(alphas[idx], 'item') else alphas[idx] for idx in gaussian_indices]}")
     
-    # Create figure with 3 columns (3 Gaussians) and 3 rows (True, Reconstructed, Difference)
-    fig = plt.figure(figsize=(18, 12))
-    gs = fig.add_gridspec(3, K, hspace=0.1, wspace=0.05, 
-                          left=0.08, right=0.9, bottom=0.08, top=0.92)
-    
+    # Create figure: 5 rows when theta_init is provided, otherwise 3 rows.
+    # 5-row layout: Initialisation | Init Error | Ground Truth | Reconstructed | Error
+    # 3-row layout: Ground Truth | Reconstructed | Error
+    n_rows = 5 if theta_init is not None else 3
+    row_true = 0
+    row_init = 1 if theta_init is not None else None
+    row_init_diff = 2 if theta_init is not None else None
+    row_est  = 3 if theta_init is not None else 1
+    row_diff = 4 if theta_init is not None else 2
+
+    fig = plt.figure(figsize=(18, 4 * n_rows))
+    gs = fig.add_gridspec(n_rows, K, hspace=0.1, wspace=0.05,
+                          left=0.08, right=0.9, bottom=0.06, top=0.97)
+
     device = theta_true['alphas'][0].device
-    
+
     # Storage for images
+    images_init = []
+    images_init_diff = []
     images_true = []
     images_est = []
     images_diff = []
@@ -324,11 +339,11 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
             max_extent_size = max(max_extent_size, 1.0)
     common_extent = (-max_extent_size, max_extent_size, -max_extent_size, max_extent_size)
 
-    print(f"\nReconstructing individual Gaussians centered at origin...")
+    logger.info("\nReconstructing individual Gaussians centered at origin...")
     
     # Reconstruct each selected Gaussian
     for k in gaussian_indices:
-        print(f"  Gaussian ρ_{k+1}...")
+        logger.info("  Gaussian ρ_{k+1}...")
         
         # Extract parameters for this Gaussian
         alpha_true_k = theta_true['alphas'][k]
@@ -398,110 +413,143 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
         images_est.append(img_est)
         images_diff.append(img_diff_log)
         extents.append(common_extent)
-    
+
+        # Init Gaussian image (post-Stage-1.5b) with independent orientation alignment
+        if theta_init is not None:
+            alpha_init_k = theta_init['alphas'][k]
+            U_init_k = theta_init['U_skews'][k]
+            U_init_np = U_init_k.cpu().numpy()
+            precision_init = U_init_np.T @ U_init_np
+            try:
+                cov_true_i = np.linalg.inv(precision_true)
+                _, eigvecs_true_i = np.linalg.eigh(cov_true_i)
+                cov_init = np.linalg.inv(precision_init)
+                _, eigvecs_init = np.linalg.eigh(cov_init)
+                R_align_init = eigvecs_true_i @ eigvecs_init.T
+                U_init_aligned_np = U_init_np @ R_align_init.T
+                U_init_aligned = torch.tensor(U_init_aligned_np, dtype=U_init_k.dtype,
+                                              device=U_init_k.device)
+            except Exception:
+                U_init_aligned = U_init_k
+            U_dev_init = (U_init_aligned @ (pixel_positions - mu_origin).T).T
+            gaussian_init = alpha_init_k * torch.exp(-0.5 * torch.sum(U_dev_init ** 2, dim=1))
+            img_init = gaussian_init.reshape(resolution, resolution).cpu().numpy()
+            img_init_diff_log = np.log10(np.clip(np.abs(img_true - img_init), 1e-8, None))
+            images_init.append(img_init)
+            images_init_diff.append(img_init_diff_log)
+
     # Determine consistent color scales
     vmin_gauss = 0
-    vmax_gauss = max([img.max() for img in images_true + images_est])
-    # For log difference plot, set a dynamic range, e.g., from -8 to max value
-    vmin_diff = -8.0 
-    vmax_diff = max([vmin_diff + 1e-3] + [img.max() for img in images_diff]) # Ensure vmax > vmin
-    
-    print(f"Gaussian value range: [0.00, {vmax_gauss:.2f}]")
-    print(f"Log10 Difference value range: [{vmin_diff:.2f}, {vmax_diff:.2f}]")
-    
-    # Store base axes for sharing
-    ax_row1_base, ax_row2_base, ax_row3_base = None, None, None
+    gauss_imgs = images_true + images_est + (images_init if theta_init is not None else [])
+    vmax_gauss = max(img.max() for img in gauss_imgs)
+    vmin_diff = -8.0
+    all_diff_imgs = images_diff + (images_init_diff if theta_init is not None else [])
+    vmax_diff = max([vmin_diff + 1e-3] + [img.max() for img in all_diff_imgs])
+
+    logger.info("Gaussian value range: [0.00, {vmax_gauss:.2f}]")
+    logger.info("Log10 Difference value range: [{vmin_diff:.2f}, {vmax_diff:.2f}]")
+
+    # base_axes[row] holds first column's ax for sharey;
+    # cb_artists[row] holds (im, label) for colorbars, updated each col (last col wins).
+    base_axes = {}
+    cb_artists = {}
 
     # Plot grid
     for col_idx, (k, img_true, img_est, img_diff, extent) in enumerate(zip(
             gaussian_indices, images_true, images_est, images_diff, extents)):
-        
-        # Row 1: Ground Truth
-        if ax_row1_base is None:
-            ax_true = fig.add_subplot(gs[0, col_idx])
-            ax_row1_base = ax_true
-        else:
-            ax_true = fig.add_subplot(gs[0, col_idx], sharey=ax_row1_base)
 
-        ax_true.grid(False)
-        im_true = ax_true.imshow(img_true, extent=extent, origin='lower', cmap='viridis', 
-                                 vmin=vmin_gauss, vmax=vmax_gauss, aspect='equal')
-        # Add contours
-        X_contour = np.linspace(extent[0], extent[1], img_true.shape[1])
-        Y_contour = np.linspace(extent[2], extent[3], img_true.shape[0])
-        ax_true.contour(X_contour, Y_contour, img_true, levels=3, colors='black', linewidths=0.7, alpha=0.4)
-        if col_idx == 0:
-            ax_true.set_ylabel('Ground Truth\n\nHeight', fontweight='bold', fontsize=_FS_LABEL)
-        else:
-            ax_true.tick_params(axis='y', labelleft=False)
-        ax_true.set_title(f'$\\rho_{{{k+1}}}$', fontweight='bold', fontsize=_FS_TITLE, pad=12)
-        ax_true.tick_params(axis='both', which='major', labelsize=_FS_TICK, labelbottom=False)
-        
-        # Row 2: Reconstructed
-        if ax_row2_base is None:
-            ax_est = fig.add_subplot(gs[1, col_idx])
-            ax_row2_base = ax_est
-        else:
-            ax_est = fig.add_subplot(gs[1, col_idx], sharey=ax_row2_base)
-        ax_est.grid(False)
-        im_est = ax_est.imshow(img_est, extent=extent, origin='lower', cmap='viridis', vmin=vmin_gauss, vmax=vmax_gauss, aspect='equal')
-        # Add contours
-        X_contour = np.linspace(extent[0], extent[1], img_est.shape[1])
-        Y_contour = np.linspace(extent[2], extent[3], img_est.shape[0])
-        ax_est.contour(X_contour, Y_contour, img_est, levels=3, colors='black', linewidths=0.7, alpha=0.4)
-        if col_idx == 0:
-            ax_est.set_ylabel('Reconstructed\n\nHeight', fontweight='bold', fontsize=_FS_LABEL)
-        else:
-            ax_est.tick_params(axis='y', labelleft=False)
-        ax_est.set_title(f'$\\widehat{{\\rho}}_{{{k+1}}}$', fontweight='bold', fontsize=_FS_TITLE, pad=12)
-        ax_est.tick_params(axis='both', which='major', labelsize=_FS_TICK, labelbottom=False)
-        
-        # Row 3: Log10 Absolute Error
-        if ax_row3_base is None:
-            ax_diff = fig.add_subplot(gs[2, col_idx])
-            ax_row3_base = ax_diff
-        else:
-            ax_diff = fig.add_subplot(gs[2, col_idx], sharey=ax_row3_base)
-        ax_diff.grid(False)
-        im_diff = ax_diff.imshow(img_diff, extent=extent, origin='lower', cmap='Greys', vmin=vmin_diff, vmax=vmax_diff, aspect='equal')
-        # Add contours
-        X_contour = np.linspace(extent[0], extent[1], img_diff.shape[1])
-        Y_contour = np.linspace(extent[2], extent[3], img_diff.shape[0])
-        ax_diff.contour(X_contour, Y_contour, img_diff, levels=3, 
-                       colors='white', linewidths=0.7, alpha=0.4)
-        if col_idx == 0:
-            ax_diff.set_ylabel('Log$_{10}$ Error\n\nHeight', fontweight='bold', fontsize=_FS_LABEL)
-        else:
-            ax_diff.tick_params(axis='y', labelleft=False)
-        ax_diff.set_title(f'$\\log_{{10}}|\\rho_{{{k+1}}} - \\widehat{{\\rho}}_{{{k+1}}}|$', fontweight='bold', fontsize=_FS_TITLE, pad=12)
-        ax_diff.set_xlabel('Depth (m)', fontweight='bold', fontsize=_FS_LABEL)
-        ax_diff.tick_params(axis='both', which='major', labelsize=_FS_TICK)
-        
-    # Add colorbars in a separate column to maintain subplot sizes
-    # Create axes for the colorbars on the right
-    cax_true = fig.add_axes([0.91, ax_row1_base.get_position().y0, 0.015, ax_row1_base.get_position().height])
-    cbar_true = fig.colorbar(im_true, cax=cax_true)
-    cbar_true.set_label('Attenuation', fontweight='bold', fontsize=_FS_CBAR)
-    cbar_true.ax.tick_params(labelsize=_FS_CBAR_TICK)
+        def _ax(row, _col=col_idx):
+            if row not in base_axes:
+                ax = fig.add_subplot(gs[row, _col])
+                base_axes[row] = ax
+            else:
+                ax = fig.add_subplot(gs[row, _col], sharey=base_axes[row])
+            return ax
 
-    cax_est = fig.add_axes([0.91, ax_row2_base.get_position().y0, 0.015, ax_row2_base.get_position().height])
-    cbar_est = fig.colorbar(im_est, cax=cax_est)
-    cbar_est.set_label('Attenuation', fontweight='bold', fontsize=_FS_CBAR)
-    cbar_est.ax.tick_params(labelsize=_FS_CBAR_TICK)
+        def _plot_gauss(ax, img, title_str, ylabel_str, _col=col_idx, _ext=extent, bottom=False):
+            ax.grid(False)
+            im = ax.imshow(img, extent=_ext, origin='lower', cmap='viridis',
+                           vmin=vmin_gauss, vmax=vmax_gauss, aspect='equal')
+            Xc = np.linspace(_ext[0], _ext[1], img.shape[1])
+            Yc = np.linspace(_ext[2], _ext[3], img.shape[0])
+            ax.contour(Xc, Yc, img, levels=3, colors='black', linewidths=0.7, alpha=0.4)
+            if _col == 0:
+                ax.set_ylabel(ylabel_str, fontweight='bold', fontsize=_FS_LABEL)
+            else:
+                ax.tick_params(axis='y', labelleft=False)
+            ax.set_title(title_str, fontweight='bold', fontsize=_FS_TITLE, pad=12)
+            ax.tick_params(axis='both', which='major', labelsize=_FS_TICK, labelbottom=bottom)
+            if bottom:
+                ax.set_xlabel('Depth (m)', fontweight='bold', fontsize=_FS_LABEL)
+            return im
 
-    cax_diff = fig.add_axes([0.91, ax_row3_base.get_position().y0, 0.015, ax_row3_base.get_position().height])
-    cbar_diff = fig.colorbar(im_diff, cax=cax_diff)
-    cbar_diff.set_label('Log$_{10}$ Error', fontweight='bold', fontsize=_FS_CBAR)
-    cbar_diff.ax.tick_params(labelsize=_FS_CBAR_TICK)
-    
-    # Overall title
-    fig.suptitle(f'Gaussian Reconstruction', 
-                 fontweight='bold', fontsize=_FS_SUPTITLE, y=0.98)
-    
+        def _plot_diff(ax, img, title_str, ylabel_str, _col=col_idx, _ext=extent, bottom=False):
+            ax.grid(False)
+            im = ax.imshow(img, extent=_ext, origin='lower', cmap='Greys',
+                           vmin=vmin_diff, vmax=vmax_diff, aspect='equal')
+            Xc = np.linspace(_ext[0], _ext[1], img.shape[1])
+            Yc = np.linspace(_ext[2], _ext[3], img.shape[0])
+            ax.contour(Xc, Yc, img, levels=3, colors='white', linewidths=0.7, alpha=0.4)
+            if _col == 0:
+                ax.set_ylabel(ylabel_str, fontweight='bold', fontsize=_FS_LABEL)
+            else:
+                ax.tick_params(axis='y', labelleft=False)
+            ax.set_title(title_str, fontweight='bold', fontsize=_FS_TITLE, pad=12)
+            ax.tick_params(axis='both', which='major', labelsize=_FS_TICK, labelbottom=bottom)
+            if bottom:
+                ax.set_xlabel('Depth (m)', fontweight='bold', fontsize=_FS_LABEL)
+            return im
+
+        # Row 0: Ground Truth
+        ax_t = _ax(row_true)
+        im_t = _plot_gauss(ax_t, img_true,
+                           f'$\\rho_{{{k+1}}}$',
+                           'Ground Truth\n\nHeight')
+        cb_artists[row_true] = (im_t, 'Attenuation')
+
+        # Rows 1–2: Initialisation and its error (post-Stage-1.5b)
+        if theta_init is not None:
+            ax_i = _ax(row_init)
+            im_i = _plot_gauss(ax_i, images_init[col_idx],
+                               f'$\\rho_{{{k+1}}}^{{(0)}}$',
+                               'Initialisation\n\nHeight')
+            cb_artists[row_init] = (im_i, 'Attenuation')
+
+            ax_id = _ax(row_init_diff)
+            im_id = _plot_diff(ax_id, images_init_diff[col_idx],
+                               f'$\\log_{{10}}|\\rho_{{{k+1}}} - \\rho_{{{k+1}}}^{{(0)}}|$',
+                               'Log$_{{10}}$ Init Error\n\nHeight')
+            cb_artists[row_init_diff] = (im_id, 'Log$_{10}$ Error')
+
+        # Row: Reconstructed
+        ax_e = _ax(row_est)
+        im_e = _plot_gauss(ax_e, img_est,
+                           f'$\\widehat{{\\rho}}_{{{k+1}}}$',
+                           'Reconstructed\n\nHeight')
+        cb_artists[row_est] = (im_e, 'Attenuation')
+
+        # Row: Error (bottom row — x-label here)
+        ax_d = _ax(row_diff)
+        im_d = _plot_diff(ax_d, img_diff,
+                          f'$\\log_{{10}}|\\rho_{{{k+1}}} - \\widehat{{\\rho}}_{{{k+1}}}|$',
+                          'Log$_{10}$ Error\n\nHeight',
+                          bottom=True)
+        cb_artists[row_diff] = (im_d, 'Log$_{10}$ Error')
+
+    # Colorbars (one per row, placed to the right)
+    for row_idx in sorted(cb_artists):
+        im, label = cb_artists[row_idx]
+        ax_ref = base_axes[row_idx]
+        cax = fig.add_axes([0.91, ax_ref.get_position().y0, 0.015,
+                            ax_ref.get_position().height])
+        cbar = fig.colorbar(im, cax=cax)
+        cbar.set_label(label, fontweight='bold', fontsize=_FS_CBAR)
+        cbar.ax.tick_params(labelsize=_FS_CBAR_TICK)
+
     if filename:
         save_figure(fig, filename)
-        print(f"\n✓ Figure 2 (Individual Gaussian Reconstruction) saved: {filename}")
-    
+        logger.info("\n✓ Figure 2 (Individual Gaussian Reconstruction) saved: {filename}")
+
     return fig
 
 
@@ -556,8 +604,8 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     
     selected_times = t[time_indices]
     
-    print(f"\nCreating Figure 3: Temporal GMM Comparison (Symmetric Layout)...")
-    print(f"Time points: {[f'{t_val.item():.3f}s' for t_val in selected_times]}")
+    logger.info("\nCreating Figure 3: Temporal GMM Comparison (Symmetric Layout)...")
+    logger.info("Time points: {[f'{t_val.item():.3f}s' for t_val in selected_times]}")
     
     # Reorder estimated parameters to match true Gaussians for consistent
     # color-coding.  The caller *should* pre-sort via
@@ -566,7 +614,7 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     theta_est_reordered, matching_indices = reorder_theta_to_match_true(
         theta_true, theta_est, K
     )
-    print(f"Gaussian matching (est → true): {matching_indices}")
+    logger.info("Gaussian matching (est → true): {matching_indices}")
     
     # Determine spatial bounds if not provided
     if spatial_bounds is None:
@@ -638,7 +686,7 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
                 Line2D([0], [0], marker='o', color='w', markerfacecolor='r', 
                        markersize=8, alpha=0.7, label='Source'),
                 Line2D([0], [0], marker='o', color='w', markerfacecolor='b', 
-                       markersize=6, alpha=0.5, label='Receivers'),
+                       markersize=6, alpha=0.5, label='Detectors'),
                 Line2D([0], [0], color='gold', linewidth=2, alpha=0.1, label='Rays')
             ])
             ax_left.legend(handles=legend_elements, loc='upper left', 
@@ -747,15 +795,11 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
             ax_right.set_xticks(xticks)
             ax_right.set_xticklabels([f'{int(-x)}' for x in xticks])
     
-    # Overall title
-    fig.suptitle(f'Temporal Evolution: Ground Truth ← Projections → {title}',
-                 fontweight='bold', fontsize=_FS_SUPTITLE, y=0.995)
-    
-    plt.tight_layout()
+    fig.tight_layout(pad=0.4)
     
     if filename:
         save_figure(fig, filename)
-        print(f"\n✓ Figure 3 (Temporal GMM Comparison) saved: {filename}")
+        logger.info("\n✓ Figure 3 (Temporal GMM Comparison) saved: {filename}")
     
     return fig
 
@@ -980,9 +1024,9 @@ def animate_gmm_with_joint_projection(
 
     if filename:
         fps_save = n_frames / (t_end - t_start)
-        print(f"Saving animation to {filename}...")
+        logger.info("Saving animation to {filename}...")
         anim.save(filename, writer='ffmpeg', fps=fps_save, dpi=DPI // 2)
-        print(f"\u2713 Animation saved: {filename}")
+        logger.info("\u2713 Animation saved: {filename}")
 
     return anim
 
@@ -1199,9 +1243,9 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     # Save animation
     if filename:
         fps_save = n_frames / (t_end - t_start)
-        print(f"Saving animation to {filename}...")
+        logger.info("Saving animation to {filename}...")
         anim.save(filename, writer='ffmpeg', fps=fps_save, dpi=DPI//2)
-        print(f"✓ Animation saved: {filename}")
+        logger.info("✓ Animation saved: {filename}")
     
     return anim
 
@@ -1297,7 +1341,7 @@ def plot_acquisition_geometry(ax, sources, receivers, d, mirror=False):
             # Plot receiver as blue circle
             ax.plot(rcvr_x, rcvr_y, 'bo', 
                    markersize=markersize, alpha=0.5,
-                   label='Receivers' if n_s == 0 and n_r == 0 else None,
+                   label='Detectors' if n_s == 0 and n_r == 0 else None,
                    zorder=50)
             
             # Plot line connecting source to receiver
@@ -1745,7 +1789,7 @@ def plot_sinogram_comparison(proj_data, proj_est, t, receivers, filename=None,
                         extent=[t_np[0], t_np[-1], receiver_heights[-1], receiver_heights[0]],
                         vmin=vmin, vmax=vmax, interpolation='bilinear')
     axes[0].set_xlabel('Time (s)', fontweight='bold')
-    axes[0].set_ylabel('Receiver Height (m)', fontweight='bold')
+    axes[0].set_ylabel('Detector height', fontweight='bold')
     axes[0].set_title('True Projections', fontweight='bold')
     cbar1 = plt.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04)
     cbar1.set_label('Intensity', fontweight='bold')
@@ -1755,7 +1799,7 @@ def plot_sinogram_comparison(proj_data, proj_est, t, receivers, filename=None,
                         extent=[t_np[0], t_np[-1], receiver_heights[-1], receiver_heights[0]],
                         vmin=vmin, vmax=vmax, interpolation='bilinear')
     axes[1].set_xlabel('Time (s)', fontweight='bold')
-    axes[1].set_ylabel('Receiver Height (m)', fontweight='bold')
+    axes[1].set_ylabel('Detector height', fontweight='bold')
     axes[1].set_title('Estimated Projections', fontweight='bold')
     cbar2 = plt.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
     cbar2.set_label('Intensity', fontweight='bold')
@@ -1765,7 +1809,7 @@ def plot_sinogram_comparison(proj_data, proj_est, t, receivers, filename=None,
                         extent=[t_np[0], t_np[-1], receiver_heights[-1], receiver_heights[0]],
                         interpolation='bilinear')
     axes[2].set_xlabel('Time (s)', fontweight='bold')
-    axes[2].set_ylabel('Receiver Height (m)', fontweight='bold')
+    axes[2].set_ylabel('Detector height', fontweight='bold')
     axes[2].set_title('Absolute Residual', fontweight='bold')
     cbar3 = plt.colorbar(im3, ax=axes[2], fraction=0.046, pad=0.04)
     cbar3.set_label('|Difference|', fontweight='bold')
@@ -1847,7 +1891,7 @@ def plot_trajectory_comparison(theta_true, theta_est, t, K, sources, receivers, 
            markeredgewidth=0.5, markeredgecolor='black', zorder=10)
     
     rcvrs = tensor_to_numpy(torch.stack(receivers[0]))
-    ax.plot(rcvrs[:, 0], rcvrs[:, 1], 'ko', markersize=2, alpha=0.3, label='Receivers')
+    ax.plot(rcvrs[:, 0], rcvrs[:, 1], 'ko', markersize=2, alpha=0.3, label='Detectors')
     
     ax.set_xlabel('$x$ (m)', fontweight='bold')
     ax.set_ylabel('$y$ (m)', fontweight='bold')
@@ -1893,12 +1937,12 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     
     figures = {}
     
-    print("\n" + "="*70)
-    print("Creating Publication-Quality Figures")
-    print("="*70)
+    logger.info("\n" + "="*70)
+    logger.info("Creating Publication-Quality Figures")
+    logger.info("="*70)
     
     # Figure 1: Acquisition geometry
-    print("\n[1/5] Acquisition Geometry...")
+    logger.info("\n[1/5] Acquisition Geometry...")
     fig1 = plot_figure1_experimental_setup(
         sources, receivers, theta_true, t, K, d,
         filename=output_dir / f"{prefix}fig1_experimental_setup.pdf",
@@ -1907,7 +1951,7 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     figures['geometry'] = fig1
     
     # Figure 2: Parameter recovery
-    print("[2/5] Parameter Recovery...")
+    logger.info("[2/5] Parameter Recovery...")
     fig2 = plot_parameter_recovery(
         theta_true, theta_est, K,
         filename=output_dir / f"{prefix}fig2_parameter_recovery.pdf",
@@ -1916,7 +1960,7 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     figures['parameters'] = fig2
     
     # Figure 3: Error analysis
-    print("[3/5] Error Analysis...")
+    logger.info("[3/5] Error Analysis...")
     fig3 = plot_error_analysis(
         theta_true, theta_est, K,
         filename=output_dir / f"{prefix}fig3_error_analysis.pdf",
@@ -1925,7 +1969,7 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     figures['errors'] = fig3
     
     # Figure 4: Sinogram comparison
-    print("[4/5] Sinogram Comparison...")
+    logger.info("[4/5] Sinogram Comparison...")
     fig4 = plot_sinogram_comparison(
         proj_data, proj_est, t, receivers,
         filename=output_dir / f"{prefix}fig4_sinogram_comparison.pdf",
@@ -1934,7 +1978,7 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     figures['sinogram'] = fig4
     
     # Figure 5: Trajectory comparison
-    print("[5/5] Trajectory Comparison...")
+    logger.info("[5/5] Trajectory Comparison...")
     fig5, _ = plot_trajectory_comparison(
         theta_true, theta_est, t, K, sources, receivers, d,
         filename=output_dir / f"{prefix}fig5_trajectory_comparison.pdf",
@@ -1942,10 +1986,10 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     )
     figures['trajectories'] = fig5
     
-    print("\n" + "="*70)
-    print("✓ All publication figures created successfully!")
-    print(f"✓ Saved to: {output_dir}")
-    print("="*70 + "\n")
+    logger.info("\n" + "="*70)
+    logger.info("✓ All publication figures created successfully!")
+    logger.info("✓ Saved to: {output_dir}")
+    logger.info("="*70 + "\n")
     
     # Figure 6
     
@@ -2009,7 +2053,7 @@ def plot_sinogram(proj_data, t, receivers, title=None, filename=None):
     cbar.ax.tick_params(labelsize=_FS_CBAR_TICK)
 
     ax.set_xlabel(r'Time $t$ (s)', fontsize=_FS_LABEL)
-    ax.set_ylabel(r'Receiver height (m)', fontsize=_FS_LABEL)
+    ax.set_ylabel(r'Detector height', fontsize=_FS_LABEL)
     ax.tick_params(axis='both', which='major', labelsize=_FS_TICK)
 
     if title is not None:
@@ -2206,7 +2250,7 @@ def plot_projection_modes(
         ax.grid(True, lw=0.4, alpha=0.4)
         ax.tick_params(axis='both', which='major', labelsize=_FS_TICK)
         if col >= 2:
-            ax.set_xlabel(r'Receiver height (m)', fontsize=_FS_LABEL)
+            ax.set_xlabel(r'Detector height', fontsize=_FS_LABEL)
         if col % 2 == 0:
             ax.set_ylabel('Projection intensity', fontsize=_FS_LABEL)
         if col < 2:           # top row: suppress x-tick labels
@@ -2236,7 +2280,7 @@ def plot_projection_modes(
         )
 
     ax_modes.set_xlabel(r'Time $t$ (s)', fontsize=_FS_LABEL)
-    ax_modes.set_ylabel(r'Receiver height (m)', fontsize=_FS_LABEL)
+    ax_modes.set_ylabel(r'Detector height', fontsize=_FS_LABEL)
     ax_modes.set_title(
         'Mixture Modes vs. Time',
         fontweight='bold',
@@ -2245,7 +2289,8 @@ def plot_projection_modes(
     ax_modes.tick_params(axis='both', which='major', labelsize=_FS_TICK)
     t_lo = t_range[0] if t_range is not None else t_np[0]
     t_hi = t_range[1] if t_range is not None else t_np[-1]
-    ax_modes.set_xlim(t_lo, t_hi)
+    t_margin = 0.10 * (t_hi - t_lo)
+    ax_modes.set_xlim(t_lo - t_margin, t_hi + t_margin)
     ax_modes.set_ylim(y_min - 0.05 * (y_max - y_min),
                       y_max + 0.05 * (y_max - y_min))
     ax_modes.grid(True, lw=0.4, alpha=0.4)

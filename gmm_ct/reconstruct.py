@@ -24,15 +24,18 @@ Usage (CLI)::
 from datetime import datetime
 from pathlib import Path
 from time import time as wall_clock
+import logging
 
 import numpy as np
 import torch
 
-from gmm_ct.visualization.publication import plot_projection_modes, plot_projection_modes, plot_sinogram
+from gmm_ct.visualization.publication import plot_projection_modes, plot_sinogram
 
 from .config.yaml_config import AnalysisConfig, ReconstructConfig
 from .core.reconstruction import GMM_reco
 from .utils.helpers import export_parameters
+
+logger = logging.getLogger(__name__)
 
 
 def _load_projection_data(data_path: str, device: torch.device):
@@ -100,12 +103,13 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
         device = torch.device(cfg.device)
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    logger.info("Device: %s", device)
 
     # --- Load observed data ---
     proj_data, t = _load_projection_data(cfg.data_path, device)
-    print(f"Loaded projections: {proj_data.shape}")
-    print(f"Time steps: {t.shape[0]}  ({t[0].item():.3f} – {t[-1].item():.3f}s)")
+    logger.info("Loaded projections: %s", proj_data.shape)
+    logger.info("Time steps: %d  (%.3f – %.3fs)",
+                t.shape[0], t[0].item(), t[-1].item())
 
     # --- Pre-load ground truth (needed for seed + diagnostic plots) ---
     _data_dir_early = Path(cfg.data_path).parent
@@ -160,7 +164,7 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
     torch.save(
         {
             "theta_est": soln_dict,
-            "theta_init": getattr(model, "theta_dict_init", None),
+            "theta_init": getattr(model, "theta_pre_stage2", None),
             "config": {
                 "n_gaussians": cfg.n_gaussians,
                 "omega_range": list(cfg.physics.omega_range),
@@ -174,7 +178,7 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
     # --- Save combined results.pt and run analysis if ground truth exists ---
     data_dir = Path(cfg.data_path).parent
     gt_path = data_dir / "ground_truth.pt"
-    theta_init = getattr(model, "theta_dict_init", None)
+    theta_init = getattr(model, "theta_pre_stage2", None)
 
     if gt_path.exists():
         gt = torch.load(gt_path, map_location=device, weights_only=False)
@@ -205,16 +209,14 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
         )
 
         elapsed = wall_clock() - start
-        print(f"\nReconstruction complete in {elapsed:.1f}s")
-        print(f"  Results saved to {experiment_dir}")
-        print(f"  Final ω: "
-              f"{[f'{omega.item():.4f}' for omega in soln_dict['omegas']]}")
+        logger.info("Reconstruction complete in %.1fs", elapsed)
+        logger.info("Results saved to %s", experiment_dir)
+        logger.info("Final ω: %s",
+                    [f'{omega.item():.4f}' for omega in soln_dict['omegas']])
 
         # --- Automatic analysis ---
         if cfg.analysis.enabled:
-            print(f"\n{'='*50}")
-            print("Running post-reconstruction analysis...")
-            print(f"{'='*50}")
+            logger.info("Running post-reconstruction analysis...")
             analyse_results(
                 theta_true=theta_true,
                 theta_est=soln_dict,
@@ -233,12 +235,11 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
             )
     else:
         elapsed = wall_clock() - start
-        print(f"\nReconstruction complete in {elapsed:.1f}s")
-        print(f"  Results saved to {experiment_dir}")
-        print(f"  Final ω: "
-              f"{[f'{omega.item():.4f}' for omega in soln_dict['omegas']]}")
-        print(f"  (ground_truth.pt not found in {data_dir}; "
-              f"analysis skipped)")
+        logger.info("Reconstruction complete in %.1fs", elapsed)
+        logger.info("Results saved to %s", experiment_dir)
+        logger.info("Final ω: %s",
+                    [f'{omega.item():.4f}' for omega in soln_dict['omegas']])
+        logger.info("ground_truth.pt not found in %s; analysis skipped", data_dir)
 
     return soln_dict
 
@@ -303,6 +304,7 @@ def analyse_results(
         plot_temporal_gmm_comparison,
         reorder_theta_to_match_true,
     )
+    from .visualization.animations import animate_GMM_motion
 
     if analysis_cfg is None:
         analysis_cfg = AnalysisConfig()
@@ -311,7 +313,7 @@ def analyse_results(
     theta_est, matching_indices = reorder_theta_to_match_true(
         theta_true, theta_est, N,
     )
-    print(f"Gaussian matching (est → true): {matching_indices}")
+    logger.info("Gaussian matching (est → true): %s", matching_indices)
     if theta_init is not None:
         theta_init, _ = reorder_theta_to_match_true(
             theta_true, theta_init, N,
@@ -347,14 +349,15 @@ def analyse_results(
 
     # --- Plots ---
     if not analysis_cfg.skip_plots:
-        print("\nGenerating plots...")
+        logger.info("Generating plots...")
 
-        time_indices = analysis_cfg.time_indices or [17, 20, 22]
+        time_indices = analysis_cfg.time_indices or [80, 90, 100]
 
         plot_individual_gaussian_reconstruction(
             theta_true, theta_est, N, d,
             gaussian_indices=range(N),
             filename=experiment_dir / "individual_gaussian_reconstruction.pdf",
+            theta_init=theta_init,
         )
 
         if theta_init is not None:
@@ -372,7 +375,7 @@ def analyse_results(
         )
         
         proj_2d = proj_data[0] if isinstance(proj_data, (list, tuple)) else proj_data
-        plot_sinogram(proj_2d, t, receivers, title="Observed Sinogram",
+        plot_sinogram(proj_2d, t, receivers,
                       filename=experiment_dir / "observed_sinogram.pdf")
         
         plot_projection_modes(proj_2d, t, receivers,
@@ -381,13 +384,13 @@ def analyse_results(
 
     # --- Animation ---
     if not analysis_cfg.skip_animations:
-        print("Generating animation (this may take a moment)...")
-        animate_temporal_gmm_comparison(
+        logger.info("Generating animation...")
+        anim = animate_temporal_gmm_comparison(
             sources, receivers, theta_true, theta_est, t, N, d,
             filename=experiment_dir / "temporal_gmm_comparison.mp4",
         )
 
-    print(f"\nAll analysis outputs in: {experiment_dir}")
+    logger.info("All analysis outputs in: %s", experiment_dir)
 
 
 # ======================================================================
@@ -432,16 +435,17 @@ def _print_error_summary(errors_init, errors_final, proj_err_init, proj_err_fina
         "U_skews": "Shape      (U)",
         "omegas": "Rotation   (ω)",
     }
-    print("\nParameter errors (relative L2):")
-    print(f"  {'':22s} {'Init':>12s}  {'Final':>12s}  {'Improvement':>12s}")
+    logger.info("Parameter errors (relative L2):")
+    logger.info("  %-22s %12s  %12s  %12s", "", "Init", "Final", "Improvement")
     for key in ["alphas", "x0s", "v0s", "U_skews", "omegas"]:
         init = errors_init[key]
         final = errors_final[key]
         imp = 100 * (1 - final / init) if init > 0 else 0
-        print(f"  {labels[key]:22s} {init:12.4e}  {final:12.4e}  {imp:+11.1f}%")
+        logger.info("  %-22s %12.4e  %12.4e  %+11.1f%%", labels[key], init, final, imp)
 
     imp_proj = 100 * (1 - proj_err_final / proj_err_init) if proj_err_init > 0 else 0
-    print(f"\n  {'Projections':22s} {proj_err_init:12.4e}  {proj_err_final:12.4e}  {imp_proj:+11.1f}%")
+    logger.info("  %-22s %12.4e  %12.4e  %+11.1f%%",
+                "Projections", proj_err_init, proj_err_final, imp_proj)
 
 
 def _plot_error_table(errors_init, errors_final, proj_err_init, proj_err_final,
@@ -495,4 +499,4 @@ def _plot_error_table(errors_init, errors_final, proj_err_init, proj_err_final,
                  fontweight="bold", fontsize=18, pad=12)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
-    print(f"Error table saved: {output_path}")
+    logger.info("Error table saved: %s", output_path)
