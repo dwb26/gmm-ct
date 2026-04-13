@@ -9,7 +9,17 @@ import math
 import warnings
 import torch
 
-def generate_true_param(d, K, initial_location, initial_velocity, initial_acceleration, min_rot, max_rot, device=None, sampling_dt=None, min_velocity_separation=0.5, min_diag_ratio=1.5):
+def generate_true_param(d, 
+                        K, 
+                        initial_location, 
+                        initial_velocity, 
+                        initial_acceleration, 
+                        min_rot, 
+                        max_rot, 
+                        device=None, 
+                        sampling_dt=None, 
+                        min_velocity_separation=0.5, 
+                        min_diag_ratio=1.5):
     """
     Generate synthetic "true" parameters for GMM reconstruction testing.
     
@@ -169,29 +179,40 @@ def generate_true_param(d, K, initial_location, initial_velocity, initial_accele
 
     _max_attempts = 500
     v0s = []
-    for k in range(K):
-        if k == 0:
-            # First velocity: accept freely
-            v0s.append(_sample_velocity())
-            continue
-        for attempt in range(_max_attempts):
-            candidate = _sample_velocity()
-            if all(
-                torch.norm(candidate - accepted).item() >= min_velocity_separation
-                for accepted in v0s
-            ):
+    hardcoded = True
+    if hardcoded:
+        # For testing: use fixed velocities to ensure consistent trajectories
+        v0s = [
+            torch.tensor([1.0, 3.0], dtype=torch.float64, device=device),
+            torch.tensor([1.5, 1.8], dtype=torch.float64, device=device),
+            torch.tensor([0.8, 2.5], dtype=torch.float64, device=device),
+            torch.tensor([0.75, 1.2], dtype=torch.float64, device=device),
+            torch.tensor([2., 3.], dtype=torch.float64, device=device),
+        ]
+    else:
+        for k in range(K):
+            if k == 0:
+                # First velocity: accept freely
+                v0s.append(_sample_velocity())
+                continue
+            for attempt in range(_max_attempts):
+                candidate = _sample_velocity()
+                if all(
+                    torch.norm(candidate - accepted).item() >= min_velocity_separation
+                    for accepted in v0s
+                ):
+                    v0s.append(candidate)
+                    break
+            else:
+                warnings.warn(
+                    f"Could not find a velocity for component {k} satisfying "
+                    f"min_velocity_separation={min_velocity_separation} after "
+                    f"{_max_attempts} attempts. Accepting last candidate anyway. "
+                    "Consider reducing min_velocity_separation or the number of components.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
                 v0s.append(candidate)
-                break
-        else:
-            warnings.warn(
-                f"Could not find a velocity for component {k} satisfying "
-                f"min_velocity_separation={min_velocity_separation} after "
-                f"{_max_attempts} attempts. Accepting last candidate anyway. "
-                "Consider reducing min_velocity_separation or the number of components.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            v0s.append(candidate)
     
     # Initial acceleration (assumed known for all Gaussians)
     a0s = [initial_acceleration.to(torch.float64) for _ in range(K)]
