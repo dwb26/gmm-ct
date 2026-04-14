@@ -57,61 +57,46 @@ COLORS_GRAY = '#6C757D'      # Gray for auxiliary info
 
 def match_estimated_to_true_gaussians(theta_true, theta_est, K):
     """
-    Match each estimated Gaussian to the closest true Gaussian based on parameter distance.
-    
-    Uses a weighted combination of:
-    - Initial velocity (v0) distance  — primary discriminator
-    - Angular velocity (omega) distance
-    - Initial position (x0) distance
-    - Attenuation coefficient (alpha) distance
-    
-    Velocity is weighted highest because in projectile-motion models the
-    initial positions and accelerations are typically shared across all
-    Gaussians, making v0 (and omega) the only per-Gaussian discriminators.
-    
+    Match each estimated Gaussian to the closest true Gaussian based on
+    trajectory parameters only.
+
+    Uses initial velocity (v0) as the primary discriminator, since the
+    trajectory optimization step assigns Gaussians by velocity and all
+    Gaussians share the same x0 and a0.  Angular velocity and position
+    are included as secondary terms for generality but are not used to
+    override the velocity-based assignment.
+
     Returns a list of indices where matching_indices[k_est] = k_true
     """
     import numpy as np
-    
-    # Compute pairwise distances between estimated and true Gaussians
+
     cost_matrix = np.zeros((K, K))
-    
+
     for k_est in range(K):
         for k_true in range(K):
-            # Velocity — primary discriminator
+            # Velocity — primary discriminator (trajectory assignment)
             v0_est = theta_est['v0s'][k_est].detach().cpu().numpy()
             v0_true = theta_true['v0s'][k_true].detach().cpu().numpy()
             dist_v0 = np.linalg.norm(v0_est - v0_true)
-            
-            # Angular velocity
+
+            # Angular velocity — secondary
             omega_est = theta_est['omegas'][k_est].detach().cpu().numpy()
             omega_true = theta_true['omegas'][k_true].detach().cpu().numpy()
             dist_omega = np.linalg.norm(omega_est - omega_true)
-            
-            # Position (often shared, but include for generality)
+
+            # Position — often shared, included for generality
             x0_est = theta_est['x0s'][k_est].detach().cpu().numpy()
             x0_true = theta_true['x0s'][k_true].detach().cpu().numpy()
             dist_x0 = np.linalg.norm(x0_est - x0_true)
-            
-            # Amplitude
-            alpha_est = theta_est['alphas'][k_est].detach().cpu().item()
-            alpha_true = theta_true['alphas'][k_true].detach().cpu().item()
-            dist_alpha = abs(alpha_est - alpha_true)
-            
-            # Weight: velocity >> omega > position > amplitude
+
             cost_matrix[k_est, k_true] = (
                 10.0 * dist_v0
                 + 3.0 * dist_omega
                 + 1.0 * dist_x0
-                + 0.5 * dist_alpha
             )
-    
-    # Use Hungarian algorithm to find optimal matching
+
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
-    
-    # Create mapping: matching_indices[k_est] = k_true
     matching_indices = col_ind.tolist()
-    
     return matching_indices
 
 
@@ -2224,14 +2209,14 @@ def plot_projection_modes(
             ):
                 ax.plot(
                     rcvr_y_asc, p_k[idx],
-                    color=color, lw=1.8, zorder=4,
+                    color=color, lw=1.5, zorder=4,
                     label=label if col == 0 else None,
                 )
                 ax.fill_between(rcvr_y_asc, p_k[idx],
                                 alpha=0.12, color=color)
 
         # Mixture projection
-        ax.plot(rcvr_y_asc, mix_row, color='black', lw=2.2, zorder=5)
+        ax.plot(rcvr_y_asc, mix_row, color='black', lw=1.5, zorder=5)
 
         # Mixture modes: vertical dashed lines + accent dots on baseline
         modes_snap = _detect_modes_3pt(mix_row, rcvr_y_asc)
@@ -2272,11 +2257,10 @@ def plot_projection_modes(
         if not modes_t:
             continue
         color = color_map.get(n_t, 'black')
-        ax_modes.plot(
+        ax_modes.scatter(
             np.full(len(modes_t), t_np[n_t]),
             modes_t,
-            marker='o', lw=0, ms=4,
-            color=color, zorder=5 if n_t in snap_set else 4,
+            s=10, color=color, zorder=5 if n_t in snap_set else 4,
         )
 
     ax_modes.set_xlabel(r'Time $t$ (s)', fontsize=_FS_LABEL)
@@ -2287,8 +2271,19 @@ def plot_projection_modes(
         fontsize=_FS_TITLE,
     )
     ax_modes.tick_params(axis='both', which='major', labelsize=_FS_TICK)
-    t_lo = t_range[0] if t_range is not None else t_np[0]
-    t_hi = t_range[1] if t_range is not None else t_np[-1]
+    if t_range is not None:
+        t_lo, t_hi = t_range[0], t_range[1]
+    else:
+        # Restrict to times where at least one mode is detected, matching
+        # the observable-time window used in the trajectory fitting plot.
+        t_with_modes = [
+            t_np[n_t] for n_t in range(n_times)
+            if _detect_modes_3pt(proj_mix_fl[n_t], rcvr_y_asc)
+        ]
+        if t_with_modes:
+            t_lo, t_hi = t_with_modes[0], t_with_modes[-1]
+        else:
+            t_lo, t_hi = t_np[0], t_np[-1]
     t_margin = 0.10 * (t_hi - t_lo)
     ax_modes.set_xlim(t_lo - t_margin, t_hi + t_margin)
     ax_modes.set_ylim(y_min - 0.05 * (y_max - y_min),

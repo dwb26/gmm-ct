@@ -17,8 +17,8 @@ class InitializationMixin:
         Initialize all GMM parameters for optimization.
 
         Initialization strategy:
-          1. Isotropic Gaussians (U_skew = scaled identity) -- essential for
-             trajectory fitting.
+          1. Anisotropic Gaussians (4:1 covariance ratio) -- essential for 
+             later omega estimation.
           2. Peak detection + random v0 -- starting point for trajectory
              optimization.
           3. Omega at midpoint of range -- simple starting guess (refined by
@@ -242,17 +242,19 @@ class InitializationMixin:
 
     def initialize_anisotropic_U_skews(self, v0s, eps=1.0):
         """
-        Initialize anisotropic U_skew matrices aligned with velocity direction.
+        Initialize anisotropic U_skew matrices as diag(30, 15) plus a small
+        strictly upper-triangular perturbation.
 
-        Creates elongated Gaussians essential for omega estimation via DTW.
-        Major axis along velocity (scale 15), minor axis perpendicular (scale 30),
-        giving a 4:1 covariance ratio.  Upper off-diagonal entries are perturbed
-        by small Gaussian noise ~ N(0, eps^2) to aid off-diagonal recovery.
+        All Gaussians receive the same diagonal initialization, giving a 4:1
+        covariance ratio (larger diagonal entry → higher precision → smaller
+        variance in that coordinate).  The strictly upper-triangular entries
+        are perturbed by small Gaussian noise ~ N(0, eps^2) to aid off-diagonal
+        recovery during optimization.
 
         Parameters
         ----------
         v0s : list of torch.Tensor
-            Optimized initial velocities from Phase 1, shape ``(2,)`` each.
+            Initial velocities (unused; retained for API compatibility).
         eps : float, optional
             Standard deviation of the Gaussian perturbation applied to the
             strictly upper-triangular entries.  Default: 1.0.
@@ -260,41 +262,20 @@ class InitializationMixin:
         Returns
         -------
         list of torch.Tensor
-            Anisotropic U_skew matrices, shape ``(2, 2)`` each.
+            Upper-triangular U_skew matrices, shape ``(d, d)`` each.
         """
         U_skews = []
 
+        diag_vals = torch.tensor([30.0, 15.0], dtype=torch.float64, device=self.device)
+
         for k in range(self.N):
-            v0_k = v0s[k]
-            v_norm = torch.norm(v0_k)
+            U_skew_k = torch.diag(diag_vals).clone()
 
-            if v_norm < 1e-6:
-                v_hat = torch.tensor([1.0, 0.0], dtype=torch.float64, device=self.device)
-            else:
-                v_hat = v0_k / v_norm
-
-            v_perp = torch.tensor([-v_hat[1], v_hat[0]], dtype=torch.float64, device=self.device)
-
-            # Small precision → large covariance → major axis
-            major_direction_scale = 15.0
-            # Large precision → small covariance → minor axis
-            minor_direction_scale = 30.0
-
-            U_skew_k = torch.stack([
-                v_hat * major_direction_scale,
-                v_perp * minor_direction_scale,
-            ], dim=1).clone()
-
-            # Perturb strictly upper-triangular entries
             if eps > 0:
                 rows, cols = torch.triu_indices(self.d, self.d, offset=1, device=self.device)
                 noise = eps * torch.randn(len(rows), dtype=torch.float64, device=self.device)
                 U_skew_k[rows, cols] = U_skew_k[rows, cols] + noise
 
             U_skews.append(U_skew_k)
-
-            ratio = (minor_direction_scale / major_direction_scale) ** 2
-            logger.debug("  Gaussian %d: elongated along velocity (covariance ratio %.1f:1)",
-                         k, ratio)
 
         return U_skews

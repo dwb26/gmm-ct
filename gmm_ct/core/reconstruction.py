@@ -247,7 +247,7 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
         }
 
         # Stage 2: Multi-start joint optimization (ω + morphology)
-        soln_dict, best_sup_err = self._stage_multistart_joint(soln_dict, warm_start=True)
+        soln_dict = self._stage_multistart_joint(soln_dict, warm_start=True)
 
         return soln_dict
 
@@ -561,6 +561,12 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
     def _stage_multistart_joint(self, soln_dict, warm_start=False):
         """Stage 2: Multi-start joint optimization of rotation + morphology.
 
+        Runs exactly ``self.n_omega_inits`` trials (default 5).  Trial 0 uses
+        the omegas already in ``soln_dict`` when ``warm_start=True``;
+        subsequent trials draw random omega candidates from
+        ``[omega_min, omega_max]``.  The trial with the lowest final loss is
+        kept.
+
         Parameters
         ----------
         soln_dict : dict
@@ -569,40 +575,21 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
         warm_start : bool, optional
             If True the first trial uses the omegas already stored in
             ``soln_dict`` (e.g. from model-fit initialization) instead of a
-            random draw.  Subsequent trials (if any) are still randomized.
-
-        Stopping behaviour
-        ------------------
-        * If ``self.omega_sup_threshold`` is set: trials continue until the
-          supremum projection error ``max_{t,r} |sim - obs|`` drops below the
-          threshold, up to a hard cap of ``self.omega_max_trials`` (defaults to
-          ``self.n_omega_inits`` when unset).  The best result found so far is
-          kept at each step, so the loop always returns something useful.
-        * Otherwise: runs exactly ``self.n_omega_inits`` trials (fixed-count
-          behaviour).
+            random draw.  Subsequent trials are still randomized.
         """
         logger.info("Stage 2: Multi-start joint optimization")
 
-        use_threshold = self.omega_sup_threshold is not None
-        n_fixed = self.n_omega_inits or 5
-
-        if use_threshold:
-            cap = self.omega_max_trials or n_fixed
-            logger.info("Threshold mode: sup error < %.3e, cap = %d trials",
-                        self.omega_sup_threshold, cap)
-        else:
-            cap = n_fixed
-            logger.info("Fixed mode: %d trials", cap)
+        n_trials = self.n_omega_inits or 5
+        logger.info("Running %d trials", n_trials)
 
         initial_alphas  = [a.clone().detach() for a in soln_dict['alphas']]
         initial_U_skews = [U.clone().detach() for U in soln_dict['U_skews']]
         omega_min = self.omega_min - 0.01
         omega_max = self.omega_max + 0.01
 
-        all_losses, all_results, all_sup_errors = [], [], []
-        threshold_met = False
+        all_losses, all_results = [], []
 
-        for trial_idx in range(cap):
+        for trial_idx in range(n_trials):
             if warm_start and trial_idx == 0:
                 initial_omegas = [
                     omega.clone().detach() for omega in soln_dict['omegas']
@@ -641,34 +628,20 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
                                     'disp': False},
             )
 
-            result_dict  = self.construct_soln_dict(res)
-            final_loss   = res.fun.item()
-            sup_err      = self._sup_projection_error(result_dict)
+            result_dict = self.construct_soln_dict(res)
+            final_loss  = res.fun.item()
 
             all_losses.append(final_loss)
             all_results.append(result_dict)
-            all_sup_errors.append(sup_err)
 
             final_omegas = [omega.item() for omega in result_dict['omegas']]
-            sup_str = f", sup err = {sup_err:.3e}" if use_threshold else ""
-            logger.info("  Trial %d/%d: loss = %.6e%s, ω = %s",
-                        trial_idx + 1, cap, final_loss, sup_str,
+            logger.info("  Trial %d/%d: loss = %.6e, ω = %s",
+                        trial_idx + 1, n_trials, final_loss,
                         [f'{w:.3f}' for w in final_omegas])
 
-            if use_threshold and sup_err < self.omega_sup_threshold:
-                logger.info("  Threshold met at trial %d (sup err %.3e < %.3e)",
-                            trial_idx + 1, sup_err, self.omega_sup_threshold)
-                threshold_met = True
-                break
-
-        best_trial_idx = int(np.argmin(all_sup_errors))
+        best_trial_idx = int(np.argmin(all_losses))
         best_result    = all_results[best_trial_idx]
         best_loss      = all_losses[best_trial_idx]
-        best_sup_err   = all_sup_errors[best_trial_idx]
-
-        if use_threshold and not threshold_met:
-            logger.warning("Threshold not met after %d trials (best sup err = %.3e)",
-                           cap, best_sup_err)
 
         soln_dict['alphas'] = [
             alpha.clone().detach() for alpha in best_result['alphas']
@@ -680,12 +653,12 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
             U.clone().detach() for U in best_result['U_skews']
         ]
 
-        logger.info("Multi-start complete — best trial: %d, sup error: %.3e, loss: %.6e",
-                    best_trial_idx + 1, best_sup_err, best_loss)
+        logger.info("Multi-start complete — best trial: %d, loss: %.6e",
+                    best_trial_idx + 1, best_loss)
         logger.info("Best ω: %s",
                     [f'{omega.item():.4f}' for omega in soln_dict['omegas']])
 
-        return soln_dict, best_sup_err
+        return soln_dict
 
     # ==================================================================
     # Optimization helpers
