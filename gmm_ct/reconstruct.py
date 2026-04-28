@@ -300,6 +300,7 @@ def analyse_results(
     import matplotlib.pyplot as plt
     from .visualization.publication import (
         animate_temporal_gmm_comparison,
+        plot_acquisition_geometry_exact,
         plot_individual_gaussian_reconstruction,
         plot_temporal_gmm_comparison,
         reorder_theta_to_match_true,
@@ -352,6 +353,11 @@ def analyse_results(
         logger.info("Generating plots...")
 
         time_indices = analysis_cfg.time_indices or [80, 90, 100]
+
+        plot_acquisition_geometry_exact(
+            sources, receivers, d,
+            filename=experiment_dir / "acquisition_geometry_exact.pdf",
+        )
 
         plot_individual_gaussian_reconstruction(
             theta_true, theta_est, N, d,

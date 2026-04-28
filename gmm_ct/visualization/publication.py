@@ -25,7 +25,7 @@ mpl.rcParams['axes.labelsize'] = 11
 mpl.rcParams['axes.titlesize'] = 12
 mpl.rcParams['xtick.labelsize'] = 9
 mpl.rcParams['ytick.labelsize'] = 9
-mpl.rcParams['legend.fontsize'] = 9
+mpl.rcParams['legend.fontsize'] = 14
 mpl.rcParams['figure.titlesize'] = 13
 mpl.rcParams['lines.linewidth'] = 1.5
 mpl.rcParams['axes.linewidth'] = 0.8
@@ -39,13 +39,13 @@ FIGSIZE_DOUBLE = (7.0, 3.5)  # Double column width (~7 inches)
 FIGSIZE_TALL = (7.0, 5.0)    # Double column, taller
 
 # Shared manuscript font sizes — edit here to rescale all figures together
-_FS_LABEL = 13       # axis labels (xlabel, ylabel)
-_FS_TITLE = 14       # subplot / panel titles
-_FS_SUPTITLE = 15    # figure-level suptitle
-_FS_TICK = 11        # tick labels
-_FS_LEGEND = 10      # legend text
-_FS_CBAR = 12        # colourbar labels
-_FS_CBAR_TICK = 10   # colourbar tick labels
+_FS_LABEL = 20       # axis labels (xlabel, ylabel)
+_FS_TITLE = 21       # subplot / panel titles
+_FS_SUPTITLE = 23    # figure-level suptitle
+_FS_TICK = 17        # tick labels
+_FS_LEGEND = 15      # legend text
+_FS_CBAR = 18        # colourbar labels
+_FS_CBAR_TICK = 15   # colourbar tick labels
 
 # Color schemes for consistency
 COLORS_TRUE = '#2E86AB'      # Blue for true values
@@ -1336,6 +1336,96 @@ def plot_acquisition_geometry(ax, sources, receivers, d, mirror=False):
                    zorder=5)
 
 
+def plot_acquisition_geometry_exact(sources, receivers, d, filename=None):
+    """
+    Standalone figure: acquisition geometry diagram.
+
+    Shows the fixed source (red), the detector array (blue dots connected by
+    a line), and the fan of rays connecting source to every detector element.
+    Annotates key geometric quantities (source position, detector extent).
+
+    Parameters
+    ----------
+    sources : list
+        Source positions as returned by ``construct_sources``.
+    receivers : list
+        Receiver positions as returned by ``construct_receivers``.
+    d : int
+        Dimensionality (must be 2).
+    filename : str or Path, optional
+        If given, the figure is saved to this path.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+    if d != 2:
+        raise NotImplementedError("Acquisition geometry figure only supports 2D")
+
+    fig, ax = plt.subplots(figsize=FIGSIZE_DOUBLE)
+
+    src = sources[0]
+    src_x, src_y = src[0].item(), src[1].item()
+    rcvr_xs = np.array([r[0].item() for r in receivers[0]])
+    rcvr_ys = np.array([r[1].item() for r in receivers[0]])
+
+    # --- Fan of rays ---
+    for rx, ry in zip(rcvr_xs, rcvr_ys):
+        ax.plot([src_x, rx], [src_y, ry],
+                color='gold', lw=0.4, alpha=0.25, zorder=1)
+
+    # --- Detector line ---
+    ax.plot(rcvr_xs, rcvr_ys,
+            color=COLORS_TRUE, lw=2, zorder=3, label='Detector array')
+    ax.scatter(rcvr_xs, rcvr_ys,
+               s=18, color=COLORS_TRUE, zorder=4)
+
+    # --- Source ---
+    ax.scatter([src_x], [src_y],
+               s=120, color='crimson', zorder=5, label='Source')
+
+    # --- Annotations ---
+    ax.annotate(f'Source\n$({src_x:.1f},\\ {src_y:.1f})$',
+                xy=(src_x, src_y),
+                xytext=(src_x - 0.6, src_y + 0.3),
+                fontsize=_FS_TICK,
+                arrowprops=dict(arrowstyle='->', lw=1.2, color='crimson'),
+                color='crimson', ha='right')
+
+    y_top, y_bot = rcvr_ys.max(), rcvr_ys.min()
+    ax.annotate('',
+                xy=(rcvr_xs[0], y_top),
+                xytext=(rcvr_xs[0], y_bot),
+                arrowprops=dict(arrowstyle='<->', lw=1.2, color=COLORS_TRUE))
+    ax.text(rcvr_xs[0] + 0.08, (y_top + y_bot) / 2,
+            f'$\\Delta y = {y_top - y_bot:.1f}$',
+            fontsize=_FS_TICK, color=COLORS_TRUE, va='center')
+
+    # --- Object domain indicator ---
+    obj_x = (src_x + rcvr_xs[0]) / 2
+    obj_y = (y_top + y_bot) / 2
+    ax.text(obj_x, obj_y, 'Object\ndomain',
+            fontsize=_FS_TICK, color='gray', ha='center', va='center',
+            style='italic', alpha=0.7)
+
+    # --- Axes ---
+    ax.set_xlabel('$x_1$ (m)', fontsize=_FS_LABEL, fontweight='bold')
+    ax.set_ylabel('$x_2$ (m)', fontsize=_FS_LABEL, fontweight='bold')
+    ax.tick_params(axis='both', which='major', labelsize=_FS_TICK)
+    ax.legend(fontsize=_FS_LEGEND, loc='upper center',
+              framealpha=0.9, ncol=2)
+    ax.set_aspect('equal')
+    ax.grid(True, lw=0.4, alpha=0.35, linestyle='--')
+
+    fig.tight_layout()
+
+    if filename:
+        save_figure(fig, filename)
+        logger.info("Acquisition geometry figure saved: %s", filename)
+
+    return fig
+
+
 def plot_trajectories_single(ax, theta, t, K, colors, mirror=False):
     """
     Plot trajectory paths for a single GMM (either true or estimated).
@@ -2182,8 +2272,8 @@ def plot_projection_modes(
     # ------------------------------------------------------------------
     # Layout
     # ------------------------------------------------------------------
-    fig = plt.figure(figsize=(14, 7))
-    gs  = GridSpec(2, 4, figure=fig, hspace=0.35, wspace=0.30)
+    fig = plt.figure(figsize=(17, 7))
+    gs  = GridSpec(2, 4, figure=fig, hspace=0.35, wspace=0.50)
 
     snap_axes = [
         fig.add_subplot(gs[0, 0]),
@@ -2231,7 +2321,7 @@ def plot_projection_modes(
 
         ax.set_xlim(y_min, y_max)
         ax.set_ylim(-0.02 * y_max_global, y_max_global)
-        ax.set_title(f'$t = {t_val:.3f}$ s', fontweight='bold', fontsize=_FS_TITLE)
+        ax.set_title(f'$t = {t_val:.3f}$ s', fontweight='bold', fontsize=_FS_TICK)
         ax.grid(True, lw=0.4, alpha=0.4)
         ax.tick_params(axis='both', which='major', labelsize=_FS_TICK)
         if col >= 2:

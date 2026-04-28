@@ -25,6 +25,7 @@ from .publication import (
     plot_sinogram_comparison,
     plot_trajectory_comparison,
     create_publication_figure,
+    plot_acquisition_geometry_exact,
 )
 
 __all__ = [
@@ -51,4 +52,5 @@ __all__ = [
     'plot_sinogram_comparison',
     'plot_trajectory_comparison',
     'create_publication_figure',
+    'plot_acquisition_geometry_exact',
 ]

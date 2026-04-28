@@ -10,9 +10,10 @@ import torch
 logger = logging.getLogger(__name__)
 
 # Default font sizes for diagnostic plots — kept in sync with publication._FS_*
-_LABEL_FONTSIZE = 13
-_TITLE_FONTSIZE = 14
-_TICK_FONTSIZE = 11
+_LABEL_FONTSIZE = 24
+_TITLE_FONTSIZE = 26
+_TICK_FONTSIZE = 20
+_LEGEND_FONTSIZE = 17
 
 
 def plot_trajectory_estimations(model, res):
@@ -466,7 +467,7 @@ def plot_trajectory_fitting(model, res):
     ax.set_xlabel('Time (s)', fontsize=_LABEL_FONTSIZE)
     ax.set_ylabel('Detector height', fontsize=_LABEL_FONTSIZE)
     ax.tick_params(axis='both', which='major', labelsize=_TICK_FONTSIZE)
-    ax.legend(fontsize=13, framealpha=0.9, ncol=max(1, model.N // 3))
+    ax.legend(fontsize=_LEGEND_FONTSIZE, framealpha=0.9, ncol=max(1, model.N // 3))
     ax.grid(True, alpha=0.3, linestyle='--')
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -503,7 +504,7 @@ def plot_trajectory_fitting(model, res):
     ax.set_xlabel('Time (s)', fontsize=_LABEL_FONTSIZE)
     ax.tick_params(axis='both', which='major', labelsize=_TICK_FONTSIZE)
     ax.tick_params(axis='y', labelleft=False)
-    ax.legend(fontsize=13, framealpha=0.9, ncol=max(1, model.N // 3))
+    ax.legend(fontsize=_LEGEND_FONTSIZE, framealpha=0.9, ncol=max(1, model.N // 3))
     ax.grid(True, alpha=0.3, linestyle='--')
 
     plt.tight_layout(pad=0.4)
