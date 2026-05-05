@@ -192,6 +192,7 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
                 "theta_true": theta_true,
                 "theta_est": soln_dict,
                 "theta_init": theta_init,
+                "theta_stage1_init": getattr(model, "theta_pre_stage1_5", None),
                 "proj_data": proj_data_input,
                 "t": t,
                 "sources": sources,
@@ -221,6 +222,7 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
                 theta_true=theta_true,
                 theta_est=soln_dict,
                 theta_init=theta_init,
+                theta_stage1_init=getattr(model, "theta_pre_stage1_5", None),
                 proj_data=proj_data_input,
                 t=t,
                 sources=sources,
@@ -253,7 +255,8 @@ def analyse_results(
     theta_true: dict,
     theta_est: dict,
     theta_init: dict | None,
-    proj_data,
+    theta_stage1_init: dict | None = None,
+    proj_data=None,
     t: torch.Tensor,
     sources,
     receivers,
@@ -363,7 +366,7 @@ def analyse_results(
             theta_true, theta_est, N, d,
             gaussian_indices=range(N),
             filename=experiment_dir / "individual_gaussian_reconstruction.pdf",
-            theta_init=theta_init,
+            theta_init=theta_stage1_init,
         )
 
         if theta_init is not None:
@@ -371,13 +374,14 @@ def analyse_results(
                 sources, receivers, theta_true, theta_init, t, N, d,
                 time_indices=time_indices,
                 filename=experiment_dir / "initial_temporal_gmm_comparison.pdf",
-                title="Initial Guesses",
+                title="Stage 2 Initialization",
             )
 
         plot_temporal_gmm_comparison(
             sources, receivers, theta_true, theta_est, t, N, d,
             time_indices=time_indices,
             filename=experiment_dir / "temporal_gmm_comparison.pdf",
+            title="Reconstruction",
         )
         
         proj_2d = proj_data[0] if isinstance(proj_data, (list, tuple)) else proj_data

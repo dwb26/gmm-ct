@@ -86,6 +86,7 @@ def main():
         theta_true=data["theta_true"],
         theta_est=data["theta_est"],
         theta_init=data.get("theta_init"),  # post-1.5b snapshot (None for old files)
+        theta_stage1_init=data.get("theta_stage1_init"),  # pre-1.5 snapshot (None for old files)
         proj_data=data["proj_data"],
         t=data["t"],
         sources=data["sources"],

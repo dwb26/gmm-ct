@@ -229,13 +229,23 @@ class GMM_reco(ForwardModelMixin, InitializationMixin):
         # Stage 1: Trajectory optimization
         soln_dict = self._stage_trajectory_optimization(t, proj_data)
 
+        # Snapshot state after Stage 1 (before ω/α refinement) for diagnostic plots.
+        self.theta_pre_stage1_5 = {
+            key: (
+                [v.clone().detach() for v in val]
+                if isinstance(val, list)
+                else val.clone().detach() if hasattr(val, 'clone') else val
+            )
+            for key, val in soln_dict.items()
+        }
+
         # Stage 1.5: ω initialization via model-fit grid search
         soln_dict = self._stage_omega_initialization(soln_dict)
 
         # Stage 1.5b: α initialization via non-negative least squares
         soln_dict = self._stage_alpha_initialization(soln_dict)
 
-        # Snapshot the post-1.5b state (resolved trajectories + ω + α init)
+        # Snapshot the post-1.5b state (resolved trajectories + refined ω + α)
         # before Stage 2 overwrites omegas/alphas/U_skews.
         self.theta_pre_stage2 = {
             key: (

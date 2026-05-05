@@ -288,8 +288,8 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
         logger.info("  Alphas: {[alphas[idx].item() if hasattr(alphas[idx], 'item') else alphas[idx] for idx in gaussian_indices]}")
     
     # Create figure: 5 rows when theta_init is provided, otherwise 3 rows.
-    # 5-row layout: Initialisation | Init Error | Ground Truth | Reconstructed | Error
-    # 3-row layout: Ground Truth | Reconstructed | Error
+    # 5-row layout: Simulated | Stage 1 Init | Init Error | Reconstruction | Recon Error
+    # 3-row layout: Simulated | Reconstruction | Recon Error
     n_rows = 5 if theta_init is not None else 3
     row_true = 0
     row_init = 1 if theta_init is not None else None
@@ -489,15 +489,15 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
         ax_t = _ax(row_true)
         im_t = _plot_gauss(ax_t, img_true,
                            f'$\\rho_{{{k+1}}}$',
-                           'Ground Truth\n\nHeight')
+                           'Simulated\n\nHeight')
         cb_artists[row_true] = (im_t, 'Attenuation')
 
-        # Rows 1–2: Initialisation and its error (post-Stage-1.5b)
+        # Rows 1–2: Initialisation and its error (pre-Stage-1.5, before ω/α refinement)
         if theta_init is not None:
             ax_i = _ax(row_init)
             im_i = _plot_gauss(ax_i, images_init[col_idx],
                                f'$\\rho_{{{k+1}}}^{{(0)}}$',
-                               'Initialisation\n\nHeight')
+                               'Stage 1 Init\n\nHeight')
             cb_artists[row_init] = (im_i, 'Attenuation')
 
             ax_id = _ax(row_init_diff)
@@ -510,7 +510,7 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
         ax_e = _ax(row_est)
         im_e = _plot_gauss(ax_e, img_est,
                            f'$\\widehat{{\\rho}}_{{{k+1}}}$',
-                           'Reconstructed\n\nHeight')
+                           'Reconstruction\n\nHeight')
         cb_artists[row_est] = (im_e, 'Attenuation')
 
         # Row: Error (bottom row — x-label here)
@@ -660,7 +660,7 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         
         # Title (only column name on first row)
         if row_idx == 0:
-            ax_left.set_title('Ground Truth', fontweight='bold', fontsize=title_fontsize, pad=12)
+            ax_left.set_title('Simulated', fontweight='bold', fontsize=title_fontsize, pad=12)
             # Add legend with Gaussian labels (vertical stack)
             from matplotlib.patches import Patch
             from matplotlib.lines import Line2D

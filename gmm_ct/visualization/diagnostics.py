@@ -461,10 +461,11 @@ def plot_trajectory_fitting(model, res):
         mask = (init_pred_h >= min_rcvr_h) & (init_pred_h <= max_rcvr_h)
         ax.plot(t_all[mask], init_pred_h[mask],
                 color=gauss_colors[k], lw=1,
-                label=f'$\\rho_{{{k+1}}}^{{(0)}}$', zorder=3)
+                label=f'$\widehat{{\\mathbf{{r}}}}[\\mathbf{{\\eta}}_{{{k+1}}}](t)$', zorder=3)
 
-    ax.set_title('Detected peaks + initial trajectories', fontsize=_TITLE_FONTSIZE)
-    ax.set_xlabel('Time (s)', fontsize=_LABEL_FONTSIZE)
+    # ax.set_title('Detected modes + trajectories', fontsize=_TITLE_FONTSIZE, fontweight='bold')
+    ax.set_title('Mode data + initialization', fontsize=_TITLE_FONTSIZE, fontweight='bold')
+    ax.set_xlabel('Time t (s)', fontsize=_LABEL_FONTSIZE)
     ax.set_ylabel('Detector height', fontsize=_LABEL_FONTSIZE)
     ax.tick_params(axis='both', which='major', labelsize=_TICK_FONTSIZE)
     ax.legend(fontsize=_LEGEND_FONTSIZE, framealpha=0.9, ncol=max(1, model.N // 3))
@@ -481,7 +482,7 @@ def plot_trajectory_fitting(model, res):
         mask = (pred_h >= min_rcvr_h) & (pred_h <= max_rcvr_h)
         ax.plot(t_all[mask], pred_h[mask],
                 color=gauss_colors[k], lw=1,
-                label=f'$\\rho_{{{k+1}}}$', zorder=3)
+                label=f'$\widehat{{\\mathbf{{r}}}}[\\mathbf{{\\eta}}_{{{k+1}}}^*](t)$', zorder=3)
 
         # Black scatter: maximising receivers heights vs observed times
         rcvrs_k = model.maximising_rcvrs[k]
@@ -500,8 +501,8 @@ def plot_trajectory_fitting(model, res):
         ax.scatter(t_obs_k.cpu(), rcvr_heights.cpu(),
                    s=10, color='black', zorder=5)
 
-    ax.set_title('Fitted trajectories', fontsize=_TITLE_FONTSIZE)
-    ax.set_xlabel('Time (s)', fontsize=_LABEL_FONTSIZE)
+    ax.set_title('Mode data + optimized estimates', fontsize=_TITLE_FONTSIZE, fontweight='bold')
+    ax.set_xlabel('Time t (s)', fontsize=_LABEL_FONTSIZE)
     ax.tick_params(axis='both', which='major', labelsize=_TICK_FONTSIZE)
     ax.tick_params(axis='y', labelleft=False)
     ax.legend(fontsize=_LEGEND_FONTSIZE, framealpha=0.9, ncol=max(1, model.N // 3))
