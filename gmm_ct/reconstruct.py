@@ -397,7 +397,7 @@ def analyse_results(
         logger.info("Generating animation...")
         anim = animate_temporal_gmm_comparison(
             sources, receivers, theta_true, theta_est, t, N, d,
-            filename=experiment_dir / "temporal_gmm_comparison.mp4",
+            filename=experiment_dir / "temporal_gmm_comparison.gif",
         )
 
     logger.info("All analysis outputs in: %s", experiment_dir)

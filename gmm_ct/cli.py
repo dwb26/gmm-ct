@@ -57,7 +57,7 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
-        "--version", action="version", version="%(prog)s 0.1.0"
+        "--version", action="version", version="%(prog)s 0.2.0"
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -143,7 +143,9 @@ def _run_simulate(args) -> int:
     logger.info("GMM-CT Simulate | N=%d, seed=%d, output=%s",
                 cfg.n_gaussians, cfg.simulation.seed, cfg.output.directory)
 
-    run_simulation(cfg)
+    out_dir = run_simulation(cfg)
+    print(f"Simulation complete. Data saved to:\n  {out_dir}")
+    print(f"\nTo reconstruct, run:\n  gmm-ct reconstruct --config configs/reconstruct.yaml --data {out_dir}/projections.pt")
     return 0
 
 

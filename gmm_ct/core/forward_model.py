@@ -8,7 +8,6 @@ functions.
 
 import torch
 
-
 class ForwardModelMixin:
     """Mixin providing forward model projection computation for GMM_reco."""
 

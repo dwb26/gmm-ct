@@ -94,10 +94,24 @@ YAML-driven CLI:
 ```bash
 # 1. Generate synthetic projection data
 gmm-ct simulate --config configs/simulate.yaml
+# Prints: "Data saved to: data/simulated/<TIMESTAMP>_seed9_N5/"
 
-# 2. Run reconstruction on the generated data
-gmm-ct reconstruct --config configs/reconstruct.yaml
+# 2. Run reconstruction, passing the generated data path via --data
+gmm-ct reconstruct --config configs/reconstruct.yaml \
+    --data data/simulated/<TIMESTAMP>_seed9_N5/projections.pt
 ```
+
+CLI flags can override config values:
+
+```bash
+gmm-ct simulate    --config configs/simulate.yaml --seed 99
+gmm-ct reconstruct --config configs/reconstruct.yaml --device cuda \
+    --data data/simulated/<TIMESTAMP>_seed9_N5/projections.pt
+```
+
+> **Note for reviewers**: `data/simulated/` is gitignored, so you will
+> need to run `gmm-ct simulate` first. The simulate command prints the
+> exact `--data` path to pass to `gmm-ct reconstruct`.
 
 The simulate step writes a `projections.pt` file (observed data + times)
 and a separate `ground_truth.pt` (true parameters — not used by
@@ -163,19 +177,15 @@ gmm-ct/
 │   ├── run_experiments.py        # Batch experiment runner (N-sweep, seeds)
 │   └── analyse.py                # Load results, compute errors, plot
 ├── experiments/
-│   ├── demos/                    # Demo & verification scripts
-│   ├── notebooks/                # Exploratory Jupyter notebooks
-│   ├── stability/                # N-scaling & stability experiment code
-│   └── deprecated/               # Superseded scripts (reference only)
+│   └── stability/                # N-scaling & stability experiment code
+├── notebooks/                    # Exploratory Jupyter notebooks
 ├── examples/
 │   └── basic_reconstruction.py   # Self-contained end-to-end example
 ├── docs/
-│   ├── guides/quickstart.md
-│   ├── research_notes/           # Algorithm design decisions
-│   └── NUMERICAL_EXPERIMENTS.md  # Planned experiments for journal submission
+│   └── guides/quickstart.md
 ├── data/
-│   ├── simulated/                # Raw projection data (per experiment)
-│   └── results/                  # Reconstruction outputs + batch_summary.csv
+│   ├── simulated/                # Raw projection data (gitignored — generate with simulate)
+│   └── results/                  # Reconstruction outputs (gitignored)
 └── pyproject.toml                # Build config, deps, tool settings
 ```
 

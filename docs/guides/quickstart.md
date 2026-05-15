@@ -24,14 +24,13 @@ pip install -e ".[dev]"
 from gmm_ct import construct_receivers
 import torch
 
-# Define sources (X-ray sources)
-sources = [torch.tensor([-20.0, 0.0], dtype=torch.float64)]
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Define receivers (detector array)
-receivers = construct_receivers(
-    device=None,  # or torch.device('cuda')
-    (100, 20.0, -10.0, 10.0)  # (n_receivers, x, y_min, y_max)
-)
+# Define sources (X-ray sources)
+sources = [torch.tensor([-1.0, -1.0], dtype=torch.float64, device=device)]
+
+# Define receivers (detector array): (n_receivers, x_coord, y_min, y_max)
+receivers = construct_receivers(device, (128, 4.0, -3.0, 1.0))
 ```
 
 ### 2. Configure Reconstruction
@@ -119,5 +118,4 @@ proj_data = model.generate_projections(time_points, theta_true)
 ## Next Steps
 
 - Check out [examples/](../examples/) for complete working examples
-- Read the [API documentation](../api/) for detailed function references
-- Explore [advanced usage](advanced_usage.md) for custom configurations
+- Use the [CLI workflow](../../README.md#yaml--command-line) for YAML-driven simulate → reconstruct

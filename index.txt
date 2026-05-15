@@ -1,0 +1,44 @@
+Supplementary Material Index
+============================
+
+File: gmm_temporal_comparison.avi
+
+Description
+-----------
+This video shows the full temporal evolution of the Gaussian Mixture Model (GMM)
+reconstruction produced by the algorithm described in the manuscript. The animation
+is laid out in three panels displayed side by side:
+
+  Left panel  – Ground Truth: the true GMM at each time step, with each Gaussian
+                component rendered as a filled ellipse (colour-coded by component
+                index) and its ballistic centre-of-mass trajectory overlaid as a
+                static path.
+
+  Centre panel – Projections: the 1-D X-ray projection profiles at each time step,
+                 showing both the observed data (ground truth) and the projections
+                 synthesised from the current reconstruction, plotted against
+                 receiver height.
+
+  Right panel  – Reconstruction: the estimated GMM at each time step using the same
+                 colour coding and trajectory overlay as the left panel, displayed in
+                 the mirrored (receiver-side) coordinate frame to reflect the
+                 measurement geometry.
+
+The animation spans the full acquisition window and is rendered on an upsampled time
+grid (8x the data sampling rate) to faithfully represent the continuous rotation of
+each Gaussian component and avoid stroboscopic aliasing artefacts. Component
+parameters include anisotropic shape matrices, attenuation coefficients, angular
+velocities, and ballistic (position, velocity, acceleration) trajectories, all
+recovered jointly by the four-stage optimisation pipeline.
+
+Justification for Inclusion
+----------------------------
+Static figures in the manuscript can only show the reconstruction quality at a small
+number of selected time instants. This video provides a complete, continuous view of
+the reconstruction fidelity across the entire acquisition window, which is useful
+for assessing the method's ability to track rapidly rotating and translating
+Gaussian components.
+
+The video is therefore a direct visual counterpart to the numerical results in the
+manuscript and adds substantive evidential value beyond what can be conveyed in
+printed figures.

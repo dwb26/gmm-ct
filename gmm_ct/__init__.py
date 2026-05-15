@@ -7,7 +7,7 @@ Gaussian Mixture Models with motion estimation.
 
 import logging
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Daniel Burrows"
 
 # Library-level null handler — callers configure their own logging
