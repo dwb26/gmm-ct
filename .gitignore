@@ -76,7 +76,6 @@ venv.bak/
 # Project specific
 data/results/
 data/simulated/
-plots/
 obscured_soln_gmm_animation_frames/
 data/sample/*.npy
 data/sample/*.pt
@@ -88,6 +87,13 @@ plots/
 test_output/
 results/
 *.md.backup
+BurrowsYarmanÖktem_SIAM_SIIMS_CoverLetter.pdf
+index.txt
+Motion_enabled_tomography_via_Gaussian_mixture_models_SIAM_submission.pdf
+presentation.ipynb
+presentation.tex
+temporaral_comparison.avi
+test.ipynb
 
 # Except sample data README
 !data/README.md

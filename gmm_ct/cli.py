@@ -122,7 +122,7 @@ def main(argv=None):
 # -----------------------------------------------------------------------
 
 def _run_simulate(args) -> int:
-from .config import load_simulate_config
+    from .config import load_simulate_config
     from .simulation import run_simulation
 
     if args.config is None:

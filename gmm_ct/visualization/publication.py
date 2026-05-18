@@ -574,7 +574,7 @@ def plot_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     Returns:
     - fig: Matplotlib figure object
     """
-    from ..core.reconstruction import GMM_reco
+    from ..model import GMM_reco
     import numpy as np
     
     if d != 2:
@@ -833,7 +833,7 @@ def animate_gmm_with_joint_projection(
     anim : matplotlib FuncAnimation
     """
     from matplotlib.animation import FuncAnimation
-    from ..core.reconstruction import GMM_reco
+    from ..model import GMM_reco
     import numpy as np
 
     if d != 2:
@@ -1047,7 +1047,7 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     - anim: Matplotlib animation object
     """
     from matplotlib.animation import FuncAnimation
-    from ..core.reconstruction import GMM_reco
+    from ..model import GMM_reco
     import numpy as np
     
     if d != 2:
@@ -1918,7 +1918,7 @@ def plot_trajectory_comparison(theta_true, theta_est, t, K, sources, receivers, 
     - filename: Output filename
     - title: Plot title
     """
-    from ..core.reconstruction import GMM_reco
+    from ..model import GMM_reco
     
     fig, ax = plt.subplots(figsize=FIGSIZE_DOUBLE)
     
