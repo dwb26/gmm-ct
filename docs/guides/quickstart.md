@@ -18,101 +18,97 @@ pip install -e ".[dev]"
 
 ## Basic Reconstruction
 
+There is no separate config object — `GMM_reco` is constructed directly.
+See [examples/basic_reconstruction.py](../../examples/basic_reconstruction.py) for
+a complete self-contained script.
+
 ### 1. Set Up Geometry
 
 ```python
-from gmm_ct import construct_receivers
 import torch
+from gmm_ct import construct_receivers, GRAVITATIONAL_ACCELERATION
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Define sources (X-ray sources)
+# X-ray source position
 sources = [torch.tensor([-1.0, -1.0], dtype=torch.float64, device=device)]
 
-# Define receivers (detector array): (n_receivers, x_coord, y_min, y_max)
-receivers = construct_receivers(device, (128, 4.0, -3.0, 1.0))
+# Receiver array: (n_receivers, x_coord, y_min, y_max)
+receivers = construct_receivers(device, (128, 4.0, -3.0, 3.0))
 ```
 
-### 2. Configure Reconstruction
+### 2. Generate Synthetic Data
 
 ```python
-from gmm_ct import ReconstructionConfig
+from gmm_ct import generate_true_param
 
-config = ReconstructionConfig(
-    n_gaussians=3,
-    omega_range=(0.0, 10.0),
-    device='cuda',  # or 'cpu'
-    max_iterations=500,
-    verbose=True
+N = 3          # number of Gaussian components
+D = 2          # spatial dimension
+OMEGA_MIN, OMEGA_MAX = -24.0, -16.0
+
+theta_true = generate_true_param(
+    D, N,
+    initial_location=torch.tensor([-8.0, 0.0], dtype=torch.float64, device=device),
+    initial_velocity=torch.tensor([3.0, 0.0], dtype=torch.float64, device=device),
+    initial_acceleration=torch.tensor([0.0, -GRAVITATIONAL_ACCELERATION],
+                                      dtype=torch.float64, device=device),
+    min_rot=OMEGA_MIN,
+    max_rot=OMEGA_MAX,
+    device=device,
 )
 ```
 
-### 3. Initialize Model
+### 3. Simulate Projections
 
 ```python
 from gmm_ct import GMM_reco
 
-model = GMM_reco(
-    d=2,  # 2D problem
-    N=3,  # 3 Gaussians
-    sources=sources,
-    receivers=receivers,
-    x0s=[torch.tensor([-8.0, 0.0])] * 3,  # Initial positions
-    a0s=[torch.tensor([0.0, -9.81])] * 3,  # Accelerations (gravity)
-    omega_min=config.omega_min,
-    omega_max=config.omega_max,
-    device=config.device
+# Use known physics (x0s, a0s) to build a forward model and generate data
+t = torch.linspace(0.0, 2.0, 65, dtype=torch.float64, device=device)
+
+forward_model = GMM_reco(
+    D, N, sources, receivers,
+    x0s=theta_true['x0s'],
+    a0s=theta_true['a0s'],
+    omega_min=OMEGA_MIN,
+    omega_max=OMEGA_MAX,
+    device=device,
+    save_diagnostics=False,
 )
+proj_data = forward_model.generate_projections(t, theta_true)
 ```
 
-### 4. Fit to Data
+### 4. Reconstruct
 
 ```python
-import numpy as np
-
-# Load or generate projection data
-proj_data = ...  # Shape: (n_sources, n_receivers, n_timepoints)
-time_points = np.linspace(0, 2.0, 50)
-
-# Fit model
-theta_estimated = model.fit(proj_data, time_points)
+model = GMM_reco(
+    D, N, sources, receivers,
+    x0s=theta_true['x0s'],   # initial positions — assumed known
+    a0s=theta_true['a0s'],   # accelerations — assumed known
+    omega_min=OMEGA_MIN,
+    omega_max=OMEGA_MAX,
+    device=device,
+    save_diagnostics=False,  # set True to write Stage 1 diagnostic plots
+)
+theta_estimated = model.fit(proj_data, t)
 ```
 
 ### 5. Visualize Results
 
 ```python
-from gmm_ct.visualization import plot_temporal_gmm_comparison
+from gmm_ct.visualization.publication import (
+    plot_temporal_gmm_comparison,
+    reorder_theta_to_match_true,
+)
+
+# Match estimated Gaussians to ground truth by velocity for colour coding
+theta_estimated, _ = reorder_theta_to_match_true(theta_true, theta_estimated, N)
 
 plot_temporal_gmm_comparison(
-    sources=sources,
-    receivers=receivers,
-    theta_true=theta_true,  # if available
-    theta_est=theta_estimated,
-    t=time_points,
-    output_path='results/comparison.png'
+    sources, receivers, theta_true, theta_estimated, t, N, D,
+    time_indices=[10, 30, 50],
+    filename='results/comparison.pdf',
 )
-```
-
-## Generate Synthetic Data
-
-For testing, you can generate synthetic data:
-
-```python
-from gmm_ct import generate_true_param
-
-theta_true = generate_true_param(
-    d=2,
-    K=3,
-    initial_location=torch.tensor([-8.0, 0.0]),
-    initial_velocity=torch.tensor([3.0, 0.0]),
-    initial_acceleration=torch.tensor([0.0, -9.81]),
-    min_rot=0.0,
-    max_rot=10.0,
-    device=device
-)
-
-# Generate projections from true parameters
-proj_data = model.generate_projections(time_points, theta_true)
 ```
 
 ## Next Steps
