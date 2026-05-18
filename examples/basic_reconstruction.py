@@ -13,7 +13,7 @@ Usage::
 
     python examples/basic_reconstruction.py
 
-Outputs are written to plots/<timestamp>_seed<SEED>_N<N>/.
+Outputs are written to data/results/<timestamp>_seed<SEED>_N<N>/.
 """
 
 import logging
@@ -80,8 +80,8 @@ def main():
     D = 2           # spatial dimension
     N_PROJ = 65     # number of projection time steps
     T_MAX = 2.0     # observation window (seconds)
-    OMEGA_MIN = -24.0
-    OMEGA_MAX = OMEGA_MIN + 8.0
+    OMEGA_MIN = 2.0
+    OMEGA_MAX = 6.0
 
     set_random_seeds(SEED)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -90,7 +90,7 @@ def main():
     # Output directory
     project_root = Path(__file__).resolve().parent.parent
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = project_root / "plots" / f"{timestamp}_seed{SEED}_N{N}"
+    out_dir = project_root / "data" / "results" / f"{timestamp}_seed{SEED}_N{N}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #

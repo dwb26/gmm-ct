@@ -187,7 +187,7 @@ class GMM_reco:
     device : str or torch.device, optional
         Computation device (auto-detected when None).
     output_dir : str or Path, optional
-        Directory for diagnostic plots (default: ``'plots/'``).
+        Directory for diagnostic plots (default: ``'data/results/'``).
     N_traj_trials : int, optional
         Multi-start trials for Stage 1 (default: max(20, 2·N)).
     n_omega_inits : int, optional
@@ -219,9 +219,10 @@ class GMM_reco:
             else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         )
 
-        # Output directory for diagnostic plots
-        self.output_dir = Path(output_dir) if output_dir else Path('plots')
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Output directory for diagnostic plots (created on demand when save_diagnostics=True)
+        self.output_dir = Path(output_dir) if output_dir else Path('data/results')
+        if self.save_diagnostics:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Precomputed constant
         self.sqrt_pi = torch.sqrt(
