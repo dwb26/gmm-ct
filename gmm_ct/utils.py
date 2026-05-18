@@ -157,7 +157,7 @@ def generate_true_param(d, K, initial_location, initial_velocity,
 
     # Initial velocities – either fixed test values or rejection-sampled
     hardcoded = True
-    if hardcoded:
+    if hardcoded and K == 5:
         _fixed_v0s = [
             torch.tensor([1.0, 3.0], dtype=torch.float64, device=device),
             torch.tensor([1.5, 1.8], dtype=torch.float64, device=device),

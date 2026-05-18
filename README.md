@@ -38,53 +38,8 @@ pip install -e ".[dev]"
 
 ### Basic Usage
 
-```python
-from gmm_ct import (
-    GMM_reco,
-    generate_true_param,
-    construct_receivers,
-    set_random_seeds,
-)
-from gmm_ct import GRAVITATIONAL_ACCELERATION
-import torch
-
-# Reproducibility
-set_random_seeds(9)
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-# CT geometry
-sources = [torch.tensor([-1.0, -1.0], dtype=torch.float64, device=device)]
-receivers = construct_receivers(device, (128, 4.0, -3.0, 3.0))
-
-# Generate synthetic ground-truth parameters
-d, N = 2, 3
-theta_true = generate_true_param(
-    d, N,
-    initial_location=torch.tensor([1.0, 1.0], dtype=torch.float64, device=device),
-    initial_velocity=torch.tensor([0.75, 0.5], dtype=torch.float64, device=device),
-    initial_acceleration=torch.tensor([0.0, -GRAVITATIONAL_ACCELERATION], dtype=torch.float64, device=device),
-    min_rot=2.0, max_rot=6.0,
-    device=device
-)
-
-# Build model and fit
-model = GMM_reco(
-    d=d, N=N,
-    sources=sources,
-    receivers=receivers,
-    x0s=theta_true['x0s'],
-    a0s=theta_true['a0s'],
-    omega_min=2.0, omega_max=6.0,
-    device=device,
-)
-
-# Generate projections and reconstruct
-time_points = torch.linspace(0, 1.5, 150, dtype=torch.float64, device=device)
-proj_data = model.generate_projections(time_points, theta_true)
-results = model.fit(proj_data, time_points)
-```
-
-See [examples/basic_reconstruction.py](examples/basic_reconstruction.py) for a complete working example.
+See [docs/guides/quickstart](docs/guides/quickstart.md) for a minimum working example or
+[examples/basic_reconstruction.py](examples/basic_reconstruction.py) for a complete working example.
 
 ### YAML + Command Line
 
@@ -113,33 +68,6 @@ gmm-ct reconstruct --config configs/reconstruct.yaml --device cuda \
 > need to run `gmm-ct simulate` first. The simulate command prints the
 > exact `--data` path to pass to `gmm-ct reconstruct`.
 
-The simulate step writes a `projections.pt` file (observed data + times)
-and a separate `ground_truth.pt` (true parameters — not used by
-reconstruction).  The reconstruct step reads `projections.pt` via the
-path given in the YAML config.
-
-CLI flags can override config values:
-
-```bash
-gmm-ct simulate   --config configs/simulate.yaml --seed 99
-gmm-ct reconstruct --config configs/reconstruct.yaml --device cuda
-```
-
-See [configs/simulate.yaml](configs/simulate.yaml) and
-[configs/reconstruct.yaml](configs/reconstruct.yaml) for annotated
-examples.  For real tomography data, point `data.projections` to your
-measurements (`.pt` or `.npy`) and provide the matching geometry &
-physics.
-
-Standalone scripts are also available:
-
-```bash
-# Run reconstruction → saves results.pt
-python scripts/reconstruct.py --N 3 --seed 42
-
-# Analyse saved results → error tables, plots, animations
-python scripts/analyse.py data/results/<experiment_dir>/
-```
 
 ## Project Structure
 
@@ -227,25 +155,13 @@ mypy gmm_ct/
 ## Documentation
 
 - [Quick Start Guide](docs/guides/quickstart.md)
-- [Numerical Experiments Plan](docs/NUMERICAL_EXPERIMENTS.md) — planned experiments for journal submission
-- [Research Notes](docs/research_notes/) — algorithm design decisions and resolved issues
 - [Examples](examples/) — runnable scripts
-
-## Current Results
-
-Baseline batch results (N = 5, seeds 1–10, ω ∈ [2, 6] Hz, 65 time steps, 1.5 s, noiseless):
-
-- ω recovery: < 1% relative error across all Gaussians and seeds
-- Shape matrices $U_k$: < 2% Frobenius relative error (noiseless)
-- Attenuation $\alpha_k$: < 2% relative error
-
-See `data/results/batch_summary.csv` for the full tabulation.
 
 ## License
 
 MIT
 
-## Author
+## Authors
 
 **Daniel Burrows, Can Evren Yarman, Ozan Oktem**
 
@@ -255,7 +171,7 @@ A journal submission is in preparation. In the meantime, please cite this reposi
 
 ```bibtex
 @software{gmm_ct,
-  author  = {Burrows, Daniel and Yarman, Can Evren and Oktem, Ozan},
+  author  = {Burrows, Daniel and Yarman, Can Evren and Öktem, Ozan},
   title   = {GMM-CT: Gaussian Mixture Model CT Reconstruction},
   year    = {2026},
   url     = {https://github.com/dwb26/gmm-ct}
