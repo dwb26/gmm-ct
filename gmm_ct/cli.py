@@ -122,7 +122,7 @@ def main(argv=None):
 # -----------------------------------------------------------------------
 
 def _run_simulate(args) -> int:
-    from .config.yaml_config import load_simulate_config
+from .config import load_simulate_config
     from .simulation import run_simulation
 
     if args.config is None:
@@ -150,7 +150,7 @@ def _run_simulate(args) -> int:
 
 
 def _run_reconstruct(args) -> int:
-    from .config.yaml_config import load_reconstruct_config
+    from .config import load_reconstruct_config
     from .reconstruct import run_reconstruction
     
     cfg = load_reconstruct_config(args.config)

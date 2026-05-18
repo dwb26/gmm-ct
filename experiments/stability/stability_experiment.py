@@ -21,7 +21,7 @@ sns.set_theme()
 
 from gmm_ct import GMM_reco, generate_true_param, construct_receivers, set_random_seeds
 from gmm_ct.visualization.publication import reorder_theta_to_match_true
-from gmm_ct.config.defaults import GRAVITATIONAL_ACCELERATION
+from gmm_ct.config import GRAVITATIONAL_ACCELERATION
 
 
 def compute_param_rel_error_local(theta_true, theta_est, N, device):

@@ -45,7 +45,7 @@ from gmm_ct import (
     construct_receivers,
     set_random_seeds,
 )
-from gmm_ct.config.defaults import GRAVITATIONAL_ACCELERATION
+from gmm_ct import GRAVITATIONAL_ACCELERATION
 import torch
 
 # Reproducibility
@@ -150,25 +150,13 @@ gmm-ct/
 │   ├── cli.py                    # CLI entry point (simulate / reconstruct)
 │   ├── simulation.py             # Synthetic data generation runner
 │   ├── reconstruct.py            # Reconstruction runner (loads data, runs fit)
-│   ├── core/
-│   │   ├── reconstruction.py      # GMM_reco class (4-stage fit pipeline)
-│   │   ├── forward_model.py       # ForwardModelMixin (projections, rotation)
-│   │   ├── initialization.py      # InitializationMixin (parameter init, peaks)
-│   │   └── solvers.py             # L-BFGS root-finding (velocity refinement)
-│   ├── estimation/
-│   │   ├── omega.py              # Omega estimation utilities
-│   │   └── peak_analysis.py      # Peak detection (PeakData)
-│   ├── utils/
-│   │   ├── generators.py         # Synthetic parameter generation
-│   │   ├── geometry.py           # Receiver construction
-│   │   └── helpers.py            # Seeds, export, misc
-│   ├── visualization/
-│   │   ├── animations.py         # GMM & projection animations
-│   │   ├── publication.py        # Publication-quality figures
-│   │   └── diagnostics.py        # Diagnostic plots (trajectory, peaks)
-│   └── config/
-│       ├── defaults.py           # ReconstructionConfig dataclass
-│       └── yaml_config.py        # YAML loading & validation
+│   ├── config.py                 # All config dataclasses + YAML loaders
+│   ├── model.py                  # GMM_reco + PeakData (4-stage pipeline)
+│   ├── utils.py                  # Geometry, parameter generation, helpers
+│   └── visualization/
+│       ├── animations.py         # GMM & projection animations
+│       ├── publication.py        # Publication-quality figures
+│       └── diagnostics.py        # Diagnostic plots (trajectory, peaks)
 ├── configs/
 │   ├── simulate.yaml             # Example simulation config
 │   └── reconstruct.yaml          # Example reconstruction config
@@ -191,29 +179,21 @@ gmm-ct/
 
 ## Key Modules
 
-| Import path | Description |
+| Module | Contents |
 |---|---|
-| `gmm_ct.core.reconstruction.GMM_reco` | Main reconstruction class (2-stage pipeline) |
-| `gmm_ct.core.forward_model.ForwardModelMixin` | Physics: projections through rotating GMMs |
-| `gmm_ct.core.initialization.InitializationMixin` | Parameter initialization & peak detection |
-| `gmm_ct.core.solvers.NewtonRaphsonLBFGS` | L-BFGS root-finder for velocity refinement |
-| `gmm_ct.estimation.omega` | Omega estimation utilities |
-| `gmm_ct.estimation.peak_analysis.PeakData` | Peak detection data container |
-| `gmm_ct.utils.generators` | Synthetic data generation |
-| `gmm_ct.utils.geometry` | CT geometry (receiver construction) |
-| `gmm_ct.utils.helpers` | Random seeds, parameter export |
-| `gmm_ct.config.defaults` | `ReconstructionConfig`, physical constants |
-| `gmm_ct.config.yaml_config` | YAML config loading (`load_reconstruct_config`, `load_simulate_config`) |
+| `gmm_ct.model` | `GMM_reco` (4-stage pipeline), `PeakData`, `NewtonRaphsonLBFGS` |
+| `gmm_ct.config` | Config dataclasses, `load_reconstruct_config`, `load_simulate_config`, `GRAVITATIONAL_ACCELERATION` |
+| `gmm_ct.utils` | `construct_receivers`, `generate_true_param`, `set_random_seeds`, `export_parameters` |
 | `gmm_ct.simulation` | Synthetic data generation runner |
 | `gmm_ct.reconstruct` | Reconstruction runner (data loading + fit) |
 | `gmm_ct.visualization.animations` | Temporal animations |
 | `gmm_ct.visualization.publication` | Publication-ready plots |
 | `gmm_ct.visualization.diagnostics` | Diagnostic plots (trajectory, peak heights) |
 
-All commonly used symbols are also re-exported from `gmm_ct` directly:
+All commonly used symbols are re-exported from `gmm_ct` directly:
 
 ```python
-from gmm_ct import GMM_reco, ReconstructionConfig, generate_true_param, construct_receivers
+from gmm_ct import GMM_reco, generate_true_param, construct_receivers, GRAVITATIONAL_ACCELERATION
 from gmm_ct import load_reconstruct_config, run_reconstruction  # YAML workflow
 ```
 

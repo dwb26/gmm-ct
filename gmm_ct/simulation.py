@@ -25,10 +25,9 @@ from time import time as wall_clock
 
 import torch
 
-from .config.yaml_config import SimulateConfig
-from .core.reconstruction import GMM_reco
-from .utils.generators import generate_true_param
-from .utils.helpers import set_random_seeds, export_parameters
+from .config import SimulateConfig
+from .model import GMM_reco
+from .utils import generate_true_param, set_random_seeds, export_parameters
 
 
 def run_simulation(cfg: SimulateConfig) -> Path:

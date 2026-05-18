@@ -30,7 +30,7 @@ from gmm_ct import (
     generate_true_param,
     set_random_seeds,
 )
-from gmm_ct.config.defaults import GRAVITATIONAL_ACCELERATION
+from gmm_ct.config import GRAVITATIONAL_ACCELERATION
 from gmm_ct.visualization.publication import (
     animate_temporal_gmm_comparison,
     plot_individual_gaussian_reconstruction,

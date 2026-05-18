@@ -29,11 +29,9 @@ import logging
 import numpy as np
 import torch
 
-from gmm_ct.visualization.publication import plot_projection_modes, plot_sinogram
-
-from .config.yaml_config import AnalysisConfig, ReconstructConfig
-from .core.reconstruction import GMM_reco
-from .utils.helpers import export_parameters
+from .config import AnalysisConfig, ReconstructConfig
+from .model import GMM_reco
+from .utils import export_parameters
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +304,8 @@ def analyse_results(
         plot_acquisition_geometry_exact,
         plot_individual_gaussian_reconstruction,
         plot_temporal_gmm_comparison,
+        plot_projection_modes,
+        plot_sinogram,
         reorder_theta_to_match_true,
     )
     from .visualization.animations import animate_GMM_motion

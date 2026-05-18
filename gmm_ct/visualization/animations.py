@@ -11,7 +11,7 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Circle, Ellipse
 from torchmin import minimize
 
-from ..core.reconstruction import GMM_reco
+from ..model import GMM_reco
 
 logger = logging.getLogger(__name__)
 

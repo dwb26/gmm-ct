@@ -14,15 +14,17 @@ __author__ = "Daniel Burrows"
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 # Import main classes and functions for convenient access
-from .config.defaults import ReconstructionConfig
-from .config.yaml_config import load_reconstruct_config, load_simulate_config
-from .core.reconstruction import GMM_reco
-from .core.solvers import NewtonRaphsonLBFGS
-from .reconstruct import run_reconstruction, analyse_results
+from .config import (
+    GRAVITATIONAL_ACCELERATION,
+    load_reconstruct_config,
+    load_simulate_config,
+    ReconstructConfig,
+    SimulateConfig,
+)
+from .model import GMM_reco, NewtonRaphsonLBFGS
+from .utils import construct_receivers, generate_true_param, set_random_seeds, export_parameters
 from .simulation import run_simulation
-from .utils.generators import generate_true_param
-from .utils.geometry import construct_receivers
-from .utils.helpers import set_random_seeds, export_parameters
+from .reconstruct import run_reconstruction, analyse_results
 from .visualization.animations import (
     save_GMM_animation,
     save_projection_comparison_animation,
@@ -42,37 +44,35 @@ from .visualization.publication import (
     plot_trajectory_comparison,
     create_publication_figure,
 )
-from .config.defaults import ReconstructionConfig
-from .config.yaml_config import load_reconstruct_config, load_simulate_config
-from .simulation import run_simulation
-from .reconstruct import run_reconstruction, analyse_results
 
 # Define what gets imported with "from gmm_ct import *"
 __all__ = [
     # Core model
     'GMM_reco',
-    'ReconstructionConfig',
-    
-    # YAML config & runners
+    'NewtonRaphsonLBFGS',
+
+    # Config & runners
+    'GRAVITATIONAL_ACCELERATION',
     'load_reconstruct_config',
     'load_simulate_config',
+    'ReconstructConfig',
+    'SimulateConfig',
     'run_simulation',
     'run_reconstruction',
     'analyse_results',
-    
+
     # Parameter generation and utilities
     'generate_true_param',
     'construct_receivers',
     'set_random_seeds',
     'export_parameters',
-    'NewtonRaphsonLBFGS',
-    
+
     # Visualization - animations
     'save_GMM_animation',
     'save_projection_comparison_animation',
     'save_GMM_with_projection_comparison',
     'save_optimization_stages_animation',
-    
+
     # Visualization - publication plots
     'plot_individual_gaussian_reconstruction',
     'plot_temporal_gmm_comparison',

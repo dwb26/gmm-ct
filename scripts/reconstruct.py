@@ -26,7 +26,7 @@ from gmm_ct import (
     generate_true_param,
     set_random_seeds,
 )
-from gmm_ct.config.defaults import GRAVITATIONAL_ACCELERATION
+from gmm_ct.config import GRAVITATIONAL_ACCELERATION
 from gmm_ct.visualization.publication import reorder_theta_to_match_true
 
 
