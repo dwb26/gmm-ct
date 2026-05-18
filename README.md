@@ -4,11 +4,11 @@ A Python package for reconstructing dynamic objects in CT imaging using Gaussian
 
 ## Overview
 
-GMM-CT recovers the internal structure and motion of objects undergoing projectile motion and rotation from limited CT projection data. Each object in the scene is modelled as a Gaussian component with anisotropic covariance, and the package jointly estimates:
+GMM-CT recovers the morphology and motion of objects undergoing projectile motion and rotation from limited CT projection data. Each particle is modelled as a Gaussian component with anisotropic covariance, and the package jointly estimates:
 
 - Attenuation coefficients ($\alpha$) and shape matrices ($U$)
-- Initial velocities ($v_0$) and ballistic trajectory parameters
-- Angular velocities ($\omega$) for in-plane rotation
+- Initial velocities ($v_0$)
+- Angular velocities ($\omega$)
 - Multi-object assignment via the Hungarian algorithm
 
 ### Reconstruction Pipeline
@@ -18,11 +18,11 @@ The reconstruction proceeds in four stages:
 | Stage | What is optimised | Method | Loss |
 |---|---|---|---|
 | **1. Trajectory** | Initial velocities $v_0$ | Multi-start L-BFGS (up to 1 500 iters) + Newton–Raphson refinement | L2 on peak receiver heights, Hungarian assignment |
-| **2. ω initialization** | Angular velocities $\omega$ | Per-Gaussian residual-sinogram grid search (200 candidates) | L2 on residual sinogram |
-| **3. α initialization** | Attenuation coefficients $\alpha$ | Non-negative least squares (NNLS) | Closed-form |
-| **4. Joint optimization** | $\alpha$, $U_{\text{skew}}$, $\omega$ | Multi-start L-BFGS (up to 1 000 iters) | Smooth L1 (Huber) on full projections |
+| **1.5a. ω initialization** | Angular velocities $\omega$ | Per-Gaussian residual-sinogram grid search (200 candidates) | L2 on residual sinogram |
+| **1.5b. α initialization** | Attenuation coefficients $\alpha$ | Non-negative least squares (NNLS) | Closed-form |
+| **2. Joint optimization** | $\alpha$, $U_{\text{skew}}$, $\omega$ | Multi-start L-BFGS (up to 1 000 iters) | Smooth L1 (Huber) on full projections |
 
-**Physical model:** Each Gaussian follows a ballistic trajectory $\mu_k(t) = x_0 + v_0\,t + \tfrac{1}{2}\,a_0\,t^2$ with in-plane rotation $R(2\pi\omega t)$. Projections are computed via a closed-form X-ray transform of the rotated Gaussian. Stage 1 decouples trajectory estimation from morphology by using isotropic Gaussians; Stages 2–4 then recover angular velocity, attenuation, and anisotropic shape.
+**Physical model:** Each Gaussian follows a trajectory $\mu_k(t) = x_0 + v_0\,t + \tfrac{1}{2}\,a_0\,t^2$ with in-plane rotation $R(2\pi\omega t)$. Projections are computed via a closed-form ray transform of the rotated Gaussian. Stage 1 decouples trajectory estimation from morphology by using isotropic Gaussians; Stages 1.5-2 then recover angular velocity, attenuation, and anisotropic shape.
 
 ## Quick Start
 
@@ -49,7 +49,7 @@ from gmm_ct.config.defaults import GRAVITATIONAL_ACCELERATION
 import torch
 
 # Reproducibility
-set_random_seeds(42)
+set_random_seeds(9)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # CT geometry
@@ -193,7 +193,7 @@ gmm-ct/
 
 | Import path | Description |
 |---|---|
-| `gmm_ct.core.reconstruction.GMM_reco` | Main reconstruction class (4-stage pipeline) |
+| `gmm_ct.core.reconstruction.GMM_reco` | Main reconstruction class (2-stage pipeline) |
 | `gmm_ct.core.forward_model.ForwardModelMixin` | Physics: projections through rotating GMMs |
 | `gmm_ct.core.initialization.InitializationMixin` | Parameter initialization & peak detection |
 | `gmm_ct.core.solvers.NewtonRaphsonLBFGS` | L-BFGS root-finder for velocity refinement |
