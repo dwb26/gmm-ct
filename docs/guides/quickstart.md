@@ -44,12 +44,12 @@ from gmm_ct import generate_true_param
 
 N = 3          # number of Gaussian components
 D = 2          # spatial dimension
-OMEGA_MIN, OMEGA_MAX = -24.0, -16.0
+OMEGA_MIN, OMEGA_MAX = 2.0, 6.0
 
 theta_true = generate_true_param(
     D, N,
-    initial_location=torch.tensor([-8.0, 0.0], dtype=torch.float64, device=device),
-    initial_velocity=torch.tensor([3.0, 0.0], dtype=torch.float64, device=device),
+    initial_location=torch.tensor([1.0, 1.0], dtype=torch.float64, device=device),
+    initial_velocity=torch.tensor([0.75, 0.5], dtype=torch.float64, device=device),
     initial_acceleration=torch.tensor([0.0, -GRAVITATIONAL_ACCELERATION],
                                       dtype=torch.float64, device=device),
     min_rot=OMEGA_MIN,
@@ -99,16 +99,24 @@ theta_estimated = model.fit(proj_data, t)
 from gmm_ct.visualization.publication import (
     plot_temporal_gmm_comparison,
     reorder_theta_to_match_true,
+    animate_temporal_gmm_comparison
 )
 
 # Match estimated Gaussians to ground truth by velocity for colour coding
 theta_estimated, _ = reorder_theta_to_match_true(theta_true, theta_estimated, N)
 
+# time_indices [8, 20, 35] → t ≈ 0.25 s, 0.625 s, 1.09 s
+# (objects remain within the receiver y-range before gravity pulls them out at ~1.25 s)
 plot_temporal_gmm_comparison(
     sources, receivers, theta_true, theta_estimated, t, N, D,
-    time_indices=[10, 30, 50],
+    time_indices=[8, 20, 35],
     filename='results/comparison.pdf',
 )
+
+anim = animate_temporal_gmm_comparison(
+            sources, receivers, theta_true, theta_estimated, t, N, D,
+            filename="results/temporal_gmm_comparison.mp4",
+        )
 ```
 
 ## Next Steps

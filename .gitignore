@@ -85,7 +85,6 @@ data/sample/*.pt
 *.avi
 plots/
 test_output/
-results/
 *.md.backup
 BurrowsYarmanÖktem_SIAM_SIIMS_CoverLetter.pdf
 index.txt

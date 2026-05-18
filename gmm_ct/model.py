@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 from scipy.optimize import linear_sum_assignment
 from torchmin import minimize
+from tqdm.auto import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -300,23 +301,41 @@ class GMM_reco:
         self.t = t.to(self.device) if isinstance(t, torch.Tensor) else torch.tensor(t, device=self.device)
         self.proj_data = self.process_projections(self._to_device(proj_data))
 
+        stage_bar = tqdm(
+            total=4,
+            desc='GMM-CT fit',
+            unit='stage',
+            leave=True,
+            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} stages [{elapsed}<{remaining}]',
+        )
+
         # Stage 1 – trajectory optimization
+        stage_bar.set_description('GMM-CT  [1/4  trajectory]')
         soln_dict = self._stage_trajectory_optimization(t, proj_data)
+        stage_bar.update(1)
 
         # Snapshot after Stage 1 (used by analysis plots)
         self.theta_pre_stage1_5 = self._clone_dict(soln_dict)
 
-        # Stage 1.5 – omega grid search
+        # Stage 1.5a – omega grid search
+        stage_bar.set_description('GMM-CT  [2/4  ω search]')
         soln_dict = self._stage_omega_initialization(soln_dict)
+        stage_bar.update(1)
 
         # Stage 1.5b – alpha NNLS
+        stage_bar.set_description('GMM-CT  [3/4  NNLS α]')
         soln_dict = self._stage_alpha_initialization(soln_dict)
+        stage_bar.update(1)
 
         # Snapshot after Stage 1.5b (used by analysis plots)
         self.theta_pre_stage2 = self._clone_dict(soln_dict)
 
         # Stage 2 – multi-start joint optimization
+        stage_bar.set_description('GMM-CT  [4/4  joint opt.]')
         soln_dict = self._stage_multistart_joint(soln_dict, warm_start=True)
+        stage_bar.update(1)
+        stage_bar.set_description('GMM-CT  [done]')
+        stage_bar.close()
 
         return soln_dict
 
@@ -332,7 +351,13 @@ class GMM_reco:
         logger.info("Running %d trajectory multi-start trials", N_traj_trials)
 
         errors, results = [], []
-        for n_trial in range(N_traj_trials):
+        trial_bar = tqdm(
+            range(N_traj_trials),
+            desc='  trials',
+            unit='trial',
+            leave=False,
+        )
+        for n_trial in trial_bar:
             logger.info("Trial %d/%d", n_trial + 1, N_traj_trials)
             self.theta_dict_init = self.initialize_parameters(t, proj_data)
             [v0_k.requires_grad_(True) for v0_k in self.theta_dict_init['v0s']]
@@ -340,10 +365,11 @@ class GMM_reco:
             theta_tensor_init = self.map_from_dict_to_tensor(self.theta_dict_init, mode='trajectory')
             res_trial = minimize(
                 self._loss_trajectory, x0=theta_tensor_init, method='l-bfgs',
-                tol=1e-8, options={'gtol': 1e-8, 'max_iter': 1500, 'disp': True},
+                tol=1e-8, options={'gtol': 1e-8, 'max_iter': 1500, 'disp': False},
             )
             errors.append(res_trial.fun)
             results.append(res_trial)
+            trial_bar.set_postfix({'best': f'{min(errors):.3e}'})
 
         best_res = results[np.argmin(np.array(errors))]
         soln_dict = self.construct_soln_dict(best_res)
@@ -413,7 +439,14 @@ class GMM_reco:
             dtype=torch.float64, device=self.device,
         )
 
-        for k in range(self.N):
+        gaussian_bar = tqdm(
+            range(self.N),
+            desc='  Gaussians',
+            unit='ρ',
+            leave=False,
+        )
+        for k in gaussian_bar:
+            gaussian_bar.set_description(f'  ρ{k + 1}/{self.N}')
             # Residual sinogram: observed minus all other Gaussians
             bg_dict = {key: list(vals) for key, vals in soln_dict.items()}
             bg_dict['alphas'] = [
@@ -550,7 +583,13 @@ class GMM_reco:
 
         all_losses, all_results = [], []
 
-        for trial_idx in range(n_trials):
+        joint_bar = tqdm(
+            range(n_trials),
+            desc='  trials',
+            unit='trial',
+            leave=False,
+        )
+        for trial_idx in joint_bar:
             if warm_start and trial_idx == 0:
                 initial_omegas = [omega.clone().detach() for omega in soln_dict['omegas']]
             else:
@@ -586,6 +625,7 @@ class GMM_reco:
             final_loss = res.fun.item()
             all_losses.append(final_loss)
             all_results.append(result_dict)
+            joint_bar.set_postfix({'best': f'{min(all_losses):.3e}'})
 
             logger.info("  Trial %d/%d: loss = %.6e, ω = %s",
                         trial_idx + 1, n_trials, final_loss,

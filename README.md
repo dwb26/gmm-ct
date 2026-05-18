@@ -60,10 +60,10 @@ receivers = construct_receivers(device, (128, 4.0, -3.0, 3.0))
 d, N = 2, 3
 theta_true = generate_true_param(
     d, N,
-    initial_location=torch.tensor([-8.0, 0.0], dtype=torch.float64, device=device),
-    initial_velocity=torch.tensor([3.0, 2.0], dtype=torch.float64, device=device),
+    initial_location=torch.tensor([1.0, 1.0], dtype=torch.float64, device=device),
+    initial_velocity=torch.tensor([0.75, 0.5], dtype=torch.float64, device=device),
     initial_acceleration=torch.tensor([0.0, -GRAVITATIONAL_ACCELERATION], dtype=torch.float64, device=device),
-    min_rot=-24.0, max_rot=-20.0,
+    min_rot=2.0, max_rot=6.0,
     device=device
 )
 
@@ -74,12 +74,12 @@ model = GMM_reco(
     receivers=receivers,
     x0s=theta_true['x0s'],
     a0s=theta_true['a0s'],
-    omega_min=-24.0, omega_max=-20.0,
+    omega_min=2.0, omega_max=6.0,
     device=device,
 )
 
 # Generate projections and reconstruct
-time_points = torch.linspace(0, 0.5, 50, dtype=torch.float64, device=device)
+time_points = torch.linspace(0, 1.5, 150, dtype=torch.float64, device=device)
 proj_data = model.generate_projections(time_points, theta_true)
 results = model.fit(proj_data, time_points)
 ```
