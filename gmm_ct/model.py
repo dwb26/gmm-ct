@@ -190,7 +190,7 @@ class GMM_reco:
         Directory for diagnostic plots (default: ``'data/results/'``).
     N_traj_trials : int, optional
         Multi-start trials for Stage 1 (default: max(20, 2·N)).
-    n_omega_inits : int, optional
+    N_omega_inits : int, optional
         Multi-start trials for Stage 2 (default: 5).
     save_diagnostics : bool, optional
         Save diagnostic plots at the end of Stage 1 (default: True).
@@ -198,8 +198,7 @@ class GMM_reco:
 
     def __init__(self, d, N, sources, receivers, x0s, a0s,
                  omega_min, omega_max, device=None, output_dir=None,
-                 N_traj_trials=None, n_omega_inits=None,
-                 omega_sup_threshold=None, omega_max_trials=None,
+                 N_traj_trials=None, N_omega_inits=None,
                  save_diagnostics=True):
         self.d = d
         self.N = N
@@ -208,9 +207,7 @@ class GMM_reco:
         self.omega_min = omega_min
         self.omega_max = omega_max
         self.N_traj_trials = N_traj_trials
-        self.n_omega_inits = n_omega_inits
-        self.omega_sup_threshold = omega_sup_threshold
-        self.omega_max_trials = omega_max_trials
+        self.N_omega_inits = N_omega_inits
         self.save_diagnostics = save_diagnostics
 
         # Device
@@ -273,9 +270,7 @@ class GMM_reco:
             device=device,
             output_dir=cfg.output.directory,
             N_traj_trials=cfg.reconstruction.n_trajectory_trials,
-            n_omega_inits=cfg.reconstruction.n_omega_inits,
-            omega_sup_threshold=cfg.reconstruction.omega_sup_threshold,
-            omega_max_trials=cfg.reconstruction.omega_max_trials,
+            N_omega_inits=cfg.reconstruction.N_omega_inits,
             save_diagnostics=cfg.output.save_plots,
         )
 
@@ -574,7 +569,7 @@ class GMM_reco:
         subsequent trials draw random omega candidates.
         """
         logger.info("Stage 2: Multi-start joint optimization")
-        n_trials = self.n_omega_inits or 5
+        n_trials = self.N_omega_inits or 5
         logger.info("Running %d trials", n_trials)
 
         initial_alphas = [a.clone().detach() for a in soln_dict['alphas']]

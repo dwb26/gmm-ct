@@ -43,7 +43,6 @@ def run_simulation(cfg: SimulateConfig) -> Path:
     Path
         Directory where outputs were written.
     """
-    start = wall_clock()
 
     # --- Reproducibility ---
     set_random_seeds(cfg.simulation.seed)
@@ -79,8 +78,7 @@ def run_simulation(cfg: SimulateConfig) -> Path:
     # generate_true_param also takes x0, v0, a0 base vectors
     dt = cfg.simulation.duration / (cfg.simulation.n_projections - 1)
     theta_true = generate_true_param(
-        d, N, x0s[0], v_base, a0s[0], omega_min, omega_max,
-        device=device, sampling_dt=dt,
+        d, N, x0s[0], v_base, a0s[0], omega_min, omega_max, device=device,
     )
 
     # --- Generate projection data ---

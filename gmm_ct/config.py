@@ -83,8 +83,6 @@ class ReconstructionSettings:
 
     n_trajectory_trials: Optional[int] = None
     n_omega_inits: Optional[int] = None
-    omega_sup_threshold: Optional[float] = None
-    omega_max_trials: Optional[int] = None
     max_iterations: int = 500
     tolerance: float = 1e-5
 
@@ -223,8 +221,6 @@ def _parse_reconstruction(raw: dict) -> ReconstructionSettings:
     return ReconstructionSettings(
         n_trajectory_trials=raw.get("n_trajectory_trials"),
         n_omega_inits=raw.get("n_omega_inits"),
-        omega_sup_threshold=raw.get("omega_sup_threshold"),
-        omega_max_trials=raw.get("omega_max_trials"),
         max_iterations=raw.get("max_iterations", 500),
         tolerance=raw.get("tolerance", 1e-5),
     )

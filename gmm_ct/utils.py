@@ -16,47 +16,71 @@ logger = logging.getLogger(__name__)
 # ==========================================================================
 
 def construct_receivers(device=None, *args):
-    """Build a flat (parallel-beam) receiver array on a vertical line.
+    """Build a flat (parallel-beam) receiver array on a vertical line (2D) or
+    a planar grid (3D).
 
     Parameters
     ----------
     device : torch.device, optional
         Device for the output tensors (default: CPU).
     *args : tuple
-        A single tuple ``(n_receivers, x_coordinate, y_min, y_max)``.
+        A single tuple describing the geometry:
+
+        * **2D** – ``(n_receivers, x1, x2_min, x2_max)``
+        * **3D** – ``(n_receivers_y, n_receivers_z, x1, y_min, y_max, z_min, z_max)``
 
     Returns
     -------
     list of list of torch.Tensor
-        ``receivers[source_idx][receiver_idx]`` → 2-D position tensor.
+        ``receivers[source_idx][receiver_idx]`` → position tensor (2-D or 3-D).
     """
     if device is None:
         device = torch.device('cpu')
 
-    n_rcvrs, x1, x2_min, x2_max = args[0]
-    x2 = torch.linspace(x2_min, x2_max, n_rcvrs, dtype=torch.float64, device=device)
-    x2 = torch.flip(x2, dims=[0])  # conventional CT orientation
-    return [[
-        torch.tensor([x1, x2_val], dtype=torch.float64, device=device)
-        for x2_val in x2
-    ]]
+    params = args[0]
+
+    if len(params) == 4:
+        # 2D: receivers on a vertical line
+        n_rcvrs, x1, x2_min, x2_max = params
+        x2 = torch.linspace(x2_min, x2_max, n_rcvrs, dtype=torch.float64, device=device)
+        x2 = torch.flip(x2, dims=[0])  # conventional CT orientation
+        return [[
+            torch.tensor([x1, x2_val], dtype=torch.float64, device=device)
+            for x2_val in x2
+        ]]
+
+    elif len(params) == 7:
+        # 3D: receivers on a flat y×z panel at fixed x1
+        n_rcvrs_y, n_rcvrs_z, x1, y_min, y_max, z_min, z_max = params
+        y = torch.linspace(y_min, y_max, n_rcvrs_y, dtype=torch.float64, device=device)
+        y = torch.flip(y, dims=[0])  # conventional CT orientation
+        z = torch.linspace(z_min, z_max, n_rcvrs_z, dtype=torch.float64, device=device)
+        return [[
+            torch.tensor([x1, y_val, z_val], dtype=torch.float64, device=device)
+            for y_val in y
+            for z_val in z
+        ]]
+
+    else:
+        raise ValueError(
+            f"Expected a tuple of length 4 (2D) or 7 (3D), got {len(params)}."
+        )
 
 
 # ==========================================================================
 # Ground-truth parameter generation
 # ==========================================================================
 
-def generate_true_param(d, K, initial_location, initial_velocity,
+def generate_true_param(d, N, initial_location, initial_velocity,
                         initial_acceleration, min_rot, max_rot,
-                        device=None, sampling_dt=None,
-                        min_velocity_separation=0.5, min_diag_ratio=1.5):
+                        device=None, min_diag_ratio=1.5):
     """Generate a complete set of synthetic GMM parameters for testing.
 
     Parameters
     ----------
     d : int
         Spatial dimensionality.
-    K : int
+    N : int
         Number of Gaussian components.
     initial_location : torch.Tensor
         Shared initial position (``d``-dimensional).
@@ -68,8 +92,6 @@ def generate_true_param(d, K, initial_location, initial_velocity,
         Angular velocity search bounds (Hz).
     device : torch.device, optional
         Computation device (default: CPU).
-    sampling_dt : float, optional
-        Projection time interval; used to screen aliased omega values.
     min_velocity_separation : float, optional
         Minimum pairwise Euclidean distance between initial velocities.
     min_diag_ratio : float, optional
@@ -90,38 +112,39 @@ def generate_true_param(d, K, initial_location, initial_velocity,
     if len(initial_acceleration) != d:
         raise ValueError("initial_acceleration must have length d.")
 
-    # Attenuation coefficients
+    # ---- Generate attenuation coefficients
     alphas = [
-        torch.tensor(15., dtype=torch.float64, device=device) + 5 * k
+        torch.tensor(15., dtype=torch.float64, device=device) + 5 * n
         + torch.randn(1, dtype=torch.float64, device=device)
-        for k in range(K)
+        for n in range(N)
     ]
 
-    # U_skew matrices – rejection-sample to enforce minimum anisotropy
-    U_ks = []
-    for _ in range(K):
+    # ---- Generate morphology precision matrices – rejection-sample to enforce minimum anisotropy
+    U_ns = []
+    for _ in range(N):
         for _attempt in range(500):
             mean_diag_val = 7.5
-            U_k_diag = torch.rand(size=(d,), dtype=torch.float64, device=device) * 18.0 + mean_diag_val
-            U_k_diag = torch.abs(U_k_diag)
+            U_n_diag = torch.rand(size=(d,), dtype=torch.float64, device=device) * 18.0 + mean_diag_val
 
-            if (U_k_diag.max() / U_k_diag.min()).item() < min_diag_ratio:
+            # Test for the anisotropy condition before constructing the full matrix. If fails, restart
+            if (U_n_diag.max() / U_n_diag.min()).item() < min_diag_ratio:
                 continue
 
-            U_k_upper = 10 + torch.randn(
+            # Construct the full upper-triangular matrix with the sampled diagonal and random upper entries
+            U_n_upper = 10 + torch.randn(
                 size=((d - 1) * d // 2,), dtype=torch.float64, device=device
             )
-            U_k = torch.zeros(d, d, dtype=torch.float64, device=device)
+            U_n = torch.zeros(d, d, dtype=torch.float64, device=device)
             triu_indices = torch.triu_indices(d, d, device=device)
             diag_idx = 0
             upper_idx = 0
             for idx in range(len(triu_indices[0])):
                 i, j = triu_indices[0][idx], triu_indices[1][idx]
                 if i == j:
-                    U_k[i, j] = U_k_diag[diag_idx]
+                    U_n[i, j] = U_n_diag[diag_idx]
                     diag_idx += 1
                 else:
-                    U_k[i, j] = U_k_upper[upper_idx]
+                    U_n[i, j] = U_n_upper[upper_idx]
                     upper_idx += 1
             break
         else:
@@ -130,73 +153,39 @@ def generate_true_param(d, K, initial_location, initial_velocity,
                 "after 500 attempts; accepting last sample.",
                 RuntimeWarning, stacklevel=2,
             )
-        U_ks.append(U_k)
+        U_ns.append(U_n)
 
-    # Angular velocities – screen aliased values
-    alias_buffer = 0.10
-
-    def _is_aliased(omega_val):
-        if sampling_dt is None:
-            return False
-        frac = abs(omega_val * 2 * sampling_dt) % 1
-        return frac < alias_buffer or frac > 1 - alias_buffer
-
-    omegas = []
-    for _ in range(K):
-        for _attempt in range(200):
-            omega_k = (
-                max_rot - torch.rand(size=(math.comb(d, 2),), dtype=torch.float64, device=device)
-                * (max_rot - min_rot)
-            )
-            if not any(_is_aliased(w.item()) for w in omega_k):
-                break
-        omegas.append(omega_k)
+    # ---- Generate angular velocities
+    omegas = [
+        max_rot - torch.rand(size=(math.comb(d, 2),), dtype=torch.float64, device=device)
+        * (max_rot - min_rot)
+        for _ in range(N)
+    ]
 
     # Initial positions (shared for all Gaussians, assumed known)
-    x0s = [initial_location.to(torch.float64) for _ in range(K)]
+    x0s = [initial_location.to(torch.float64) for _ in range(N)]
 
-    # Initial velocities – either fixed test values or rejection-sampled
+    # Initial velocities
     hardcoded = True
-    if hardcoded and K == 5:
-        _fixed_v0s = [
+    if hardcoded and N == 5 and d == 2:
+        v0s = [
             torch.tensor([1.0, 3.0], dtype=torch.float64, device=device),
             torch.tensor([1.5, 1.8], dtype=torch.float64, device=device),
             torch.tensor([0.8, 2.5], dtype=torch.float64, device=device),
             torch.tensor([0.75, 1.2], dtype=torch.float64, device=device),
             torch.tensor([2., 3.], dtype=torch.float64, device=device),
         ]
-        v0s = _fixed_v0s[:K]
     else:
-        def _sample_velocity():
-            v_h = initial_velocity[0] + torch.rand(1, dtype=torch.float64, device=device).item() * 1.5
-            v_v = (torch.rand(1, dtype=torch.float64, device=device).item() - 0.5) * 4.5
-            return torch.tensor([v_h, v_v], dtype=torch.float64, device=device)
+        v0s = [
+            initial_velocity.to(torch.float64) + (
+                torch.rand(d, dtype=torch.float64, device=device) - 0.5
+            ) * 4.5
+            for _ in range(N)
+        ]
 
-        v0s = []
-        for k in range(K):
-            if k == 0:
-                v0s.append(_sample_velocity())
-                continue
-            for _attempt in range(500):
-                candidate = _sample_velocity()
-                if all(
-                    torch.norm(candidate - accepted).item() >= min_velocity_separation
-                    for accepted in v0s
-                ):
-                    v0s.append(candidate)
-                    break
-            else:
-                warnings.warn(
-                    f"Could not find a velocity for component {k} satisfying "
-                    f"min_velocity_separation={min_velocity_separation}. "
-                    "Accepting last candidate.",
-                    RuntimeWarning, stacklevel=2,
-                )
-                v0s.append(candidate)
+    a0s = [initial_acceleration.to(torch.float64) for _ in range(N)]
 
-    a0s = [initial_acceleration.to(torch.float64) for _ in range(K)]
-
-    return {"alphas": alphas, "U_skews": U_ks, "omegas": omegas,
+    return {"alphas": alphas, "U_skews": U_ns, "omegas": omegas,
             "x0s": x0s, "v0s": v0s, "a0s": a0s}
 
 
