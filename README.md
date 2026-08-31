@@ -2,7 +2,7 @@
 
 A Python package for reconstructing dynamic objects in CT imaging using Gaussian Mixture Models with motion estimation.
 
-![Example Results: 5-particle reconstruction](temporal_gmm_comparison.pdf)
+![Example Results: 5-particle reconstruction](temporal_gmm_comparison-1.png)
 *Three time samples with the unknown target state objects (left), the reconstructed estimates (right), and the two corresponding sinograms by which the reconstruction is informed (center).*
 
 ## Overview
