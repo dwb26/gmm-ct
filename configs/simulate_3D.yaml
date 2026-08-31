@@ -1,0 +1,51 @@
+# ===========================================================================
+# GMM-CT  –  Simulation Configuration (3D)
+# ===========================================================================
+# Generate synthetic 3D projection data from a ground-truth Gaussian mixture.
+#
+# Usage:
+#   gmm-ct simulate --config configs/simulate_3D.yaml
+#   gmm-ct simulate --config configs/simulate_3D.yaml --seed 99
+# ===========================================================================
+
+# --- Model ----------------------------------------------------------------
+model:
+  n_gaussians: 1                     # Number of Gaussian components (increase for multi-component runs)
+
+# --- CT Geometry ----------------------------------------------------------
+geometry:
+  sources:
+    - [-1.0, 0.0, -1.0]             # Single source position [x, y, z]
+
+  receivers:
+    n_receivers_y: 50                # Number of detector elements along the y-axis
+    n_receivers_z: 50                # Number of detector elements along the z-axis (total: n_y × n_z)
+    x_coordinate: 4.0               # X-position of the detector plane
+    y_min: -3.0                      # Left edge of detector (y-axis)
+    y_max: 1.0                       # Right edge of detector (y-axis)
+    z_min: -3.0                      # Bottom edge of detector (z-axis)
+    z_max: 1.0                       # Top edge of detector (z-axis)
+
+# --- Known Physics --------------------------------------------------------
+# These are the parameters assumed known in the reconstruction.
+# For simulation, they also define the ground truth trajectories.
+physics:
+  initial_positions:
+    - [1.0, 0.0, 1.0]               # Shared initial position [x, y, z] (broadcast to all Gaussians)
+
+  accelerations:
+    - [0.0, 0.0, -9.81]             # Acceleration [x, y, z] – gravity acts along the z-axis
+
+  omega_range: [2.0, 6.0]           # Angular velocity search bounds [min, max] (Hz); applies to all comb(d,2)=3 rotation planes
+
+# --- Simulation Settings -------------------------------------------------
+simulation:
+  seed: 9                           # Random seed for reproducibility
+  n_projections: 150                # Number of time steps
+  duration: 0.5                     # Time window (seconds)
+  initial_velocity: [0.75, 0.0, 1.0]  # Base initial velocity [x, y, z] (perturbations added per Gaussian)
+
+# --- Output ---------------------------------------------------------------
+output:
+  directory: data/simulated          # Where to save projections + ground truth
+  verbose: false

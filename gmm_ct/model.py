@@ -269,7 +269,7 @@ class GMM_reco:
             omega_max=omega_max,
             device=device,
             output_dir=cfg.output.directory,
-            N_traj_trials=cfg.reconstruction.n_trajectory_trials,
+            N_traj_trials=cfg.reconstruction.N_trajectory_trials,
             N_omega_inits=cfg.reconstruction.N_omega_inits,
             save_diagnostics=cfg.output.save_plots,
         )

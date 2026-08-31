@@ -41,10 +41,17 @@ class GeometryConfig:
             for s in self.sources
         ]
         rcv = self.receivers
-        receivers_t = construct_receivers(
-            device,
-            (rcv["n_receivers"], rcv["x_coordinate"], rcv["y_min"], rcv["y_max"]),
-        )
+        d = self.dimensionality
+        if d == 2:
+            receivers_t = construct_receivers(
+                device,
+                (rcv["n_receivers"], rcv["x_coordinate"], rcv["y_min"], rcv["y_max"]),
+            )
+        elif d == 3:
+            receivers_t = construct_receivers(
+                device,
+                (rcv["n_receivers_y"], rcv["n_receivers_z"], rcv["x_coordinate"], rcv["y_min"], rcv["y_max"], rcv["z_min"], rcv["z_max"]),
+            )
         return sources_t, receivers_t
 
 
@@ -81,8 +88,8 @@ class PhysicsConfig:
 class ReconstructionSettings:
     """Tuning knobs for the 4-stage reconstruction pipeline."""
 
-    n_trajectory_trials: Optional[int] = None
-    n_omega_inits: Optional[int] = None
+    N_trajectory_trials: Optional[int] = None
+    N_omega_inits: Optional[int] = None
     max_iterations: int = 500
     tolerance: float = 1e-5
 
@@ -219,8 +226,8 @@ def _parse_physics(raw: dict) -> PhysicsConfig:
 
 def _parse_reconstruction(raw: dict) -> ReconstructionSettings:
     return ReconstructionSettings(
-        n_trajectory_trials=raw.get("n_trajectory_trials"),
-        n_omega_inits=raw.get("n_omega_inits"),
+        N_trajectory_trials=raw.get("N_trajectory_trials"),
+        N_omega_inits=raw.get("N_omega_inits"),
         max_iterations=raw.get("max_iterations", 500),
         tolerance=raw.get("tolerance", 1e-5),
     )

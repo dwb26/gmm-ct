@@ -377,9 +377,20 @@ def analyse_results(
                 title="Stage 2 Initialization",
             )
 
+        # plot_temporal_gmm_comparison(
+        #     sources, receivers, theta_true, theta_est, t, N, d,
+        #     time_indices=time_indices,
+        #     filename=experiment_dir / "temporal_gmm_comparison.pdf",
+        #     title="Reconstruction",
+        # )
         plot_temporal_gmm_comparison(
-            sources, receivers, theta_true, theta_est, t, N, d,
-            time_indices=time_indices,
+            sources=sources,
+            receivers=receivers,
+            theta_true=theta_true,
+            theta_est=theta_est,
+            t=t,
+            K=N,
+            d=d,
             filename=experiment_dir / "temporal_gmm_comparison.pdf",
             title="Reconstruction",
         )

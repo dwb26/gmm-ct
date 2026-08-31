@@ -27,6 +27,14 @@ from .publication import (
     create_publication_figure,
     plot_acquisition_geometry_exact,
 )
+from .simulate_viz import (
+    plot_simulation_summary,
+    plot_projection_frames,
+    plot_true_trajectories,
+    animate_simulation,
+    export_poster_gmm_figure,
+    export_poster_snapshot_sinogram_figure,
+)
 
 __all__ = [
     # Animations
@@ -34,7 +42,7 @@ __all__ = [
     'save_projection_comparison_animation',
     'save_GMM_with_projection_comparison',
     'save_optimization_stages_animation',
-    # Diagnostics
+    # Reconstruction diagnostics (2D)
     'plot_trajectory_estimations',
     'plot_heights_by_assignment',
     'plot_raw_receiver_heights',
@@ -53,4 +61,11 @@ __all__ = [
     'plot_trajectory_comparison',
     'create_publication_figure',
     'plot_acquisition_geometry_exact',
+    # Simulation output validation (2D + 3D)
+    'plot_simulation_summary',
+    'plot_projection_frames',
+    'plot_true_trajectories',
+    'animate_simulation',
+    'export_poster_gmm_figure',
+    'export_poster_snapshot_sinogram_figure',
 ]

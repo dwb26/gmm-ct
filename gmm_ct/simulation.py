@@ -23,7 +23,11 @@ from datetime import datetime
 from pathlib import Path
 from time import time as wall_clock
 
+from gmm_ct.visualization.simulate_viz import animate_simulation
 import torch
+
+import logging
+logger = logging.getLogger(__name__)
 
 from .config import SimulateConfig
 from .model import GMM_reco
@@ -128,5 +132,30 @@ def run_simulation(cfg: SimulateConfig) -> Path:
         experiment_dir / "true_parameters.md",
         title="Ground Truth Parameters",
     )
+    
+    # from gmm_ct.visualization import animate_simulation
+    from gmm_ct.visualization import export_poster_gmm_figure, export_poster_snapshot_sinogram_figure
+
+    # Returns the FuncAnimation object; also saves to mp4 if output_path is given
+    # _ = animate_simulation(
+        # experiment_dir,
+        # output_path=experiment_dir / 'simulation_2d.mp4'
+    # )
+    
+    # from gmm_ct.visualization.simulate_viz import animate_simulation_interactive
+    # animate_simulation_interactive(
+    #     experiment_dir,
+    #     output_path=experiment_dir / "simulation_3d_interactive.html",
+    #     upsample=8,
+    #     show_trajectories=True,
+    #     detector_panel=True,
+    # )
+    
+    # logger.info(f"Simulated data saved to {experiment_dir}")
+    
+    # from gmm_ct.visualization.simulate_viz import animate_simulation
+    
+    export_poster_gmm_figure(experiment_dir)
+    export_poster_snapshot_sinogram_figure(experiment_dir)
 
     return experiment_dir

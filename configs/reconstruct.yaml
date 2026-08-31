@@ -44,8 +44,8 @@ physics:
 
 # --- Reconstruction Settings ---------------------------------------------
 reconstruction:
-  n_trajectory_trials: 20            # Multi-start trials for trajectory opt (null = auto)
-  n_omega_inits: 3                   # Trial cap for joint opt
+  N_trajectory_trials: 20            # Multi-start trials for trajectory opt (null = auto)
+  N_omega_inits: 3                   # Trial cap for joint opt
   max_iterations: 500                # Maximum L-BFGS iterations
   tolerance: 1.0e-8                  # Convergence tolerance
 

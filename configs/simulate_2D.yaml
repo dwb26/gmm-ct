@@ -11,13 +11,12 @@
 
 # --- Model ----------------------------------------------------------------
 model:
-  n_gaussians: 1                     # Number of Gaussian components
+  n_gaussians: 5                     # Number of Gaussian components
 
 # --- CT Geometry ----------------------------------------------------------
 geometry:
   sources:
-    # - [-1.0, -1.0]                   # Single fan-beam source position (d-dimensional)
-    - [-1.0, 0.0, -1.0]                   # Single fan-beam source position (d-dimensional)
+    - [-1.0, -1.0]                   # Single fan-beam source position (d-dimensional)
 
   receivers:
     n_receivers: 128                 # Number of detector elements
