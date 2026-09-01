@@ -43,6 +43,7 @@ from .visualization.publication import (
     plot_projection_modes,
     plot_trajectory_comparison,
     create_publication_figure,
+    plot_projection_modes_and_trajectories,
 )
 
 # Define what gets imported with "from gmm_ct import *"
@@ -85,4 +86,5 @@ __all__ = [
     'plot_projection_modes',
     'plot_trajectory_comparison',
     'create_publication_figure',
+    'plot_projection_modes_and_trajectories',
 ]

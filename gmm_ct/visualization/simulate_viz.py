@@ -1390,9 +1390,9 @@ def export_poster_snapshot_sinogram_figure(
 
         ax.set_xlim(src_x - x_margin, rcvr_x + x_margin)
         ax.set_ylim(y_min, y_max)
-        ax.set_xlabel("Depth (m)", fontweight="bold", fontsize=12)
+        ax.set_xlabel("Depth (m)", fontweight="bold", fontsize=18)
         if i == 0:
-            ax.set_ylabel("Detector Height (m)", fontweight="bold", fontsize=12)
+            ax.set_ylabel("Detector Height (m)", fontweight="bold", fontsize=18)
         else:
             ax.tick_params(labelleft=False)
 
@@ -1402,7 +1402,7 @@ def export_poster_snapshot_sinogram_figure(
         ax.set_title(
             f"State Snapshot ($t = {t_actual:.2f}\\text{{s}}$)",
             fontweight="bold",
-            fontsize=13,
+            fontsize=18,
         )
 
         plot_trajectories_single(
@@ -1441,13 +1441,13 @@ def export_poster_snapshot_sinogram_figure(
 
     cbar = fig.colorbar(im, ax=ax_sino, pad=0.015, fraction=0.02)
     cbar.set_label(
-        "Projection intensity", fontweight="bold", fontsize=12, labelpad=10
+        "Projection intensity", fontweight="bold", fontsize=18, labelpad=10
     )
 
     ax_sino.tick_params(axis="both", labelsize=14)
-    ax_sino.set_xlabel("Time (s)", fontweight="bold", fontsize=13)
-    ax_sino.set_ylabel("Detector Height (m)", fontweight="bold", fontsize=13)
-    ax_sino.set_title("Dynamic Sinogram", fontweight="bold", fontsize=14, pad=8)
+    ax_sino.set_xlabel("Time (s)", fontweight="bold", fontsize=18)
+    ax_sino.set_ylabel("Detector Height (m)", fontweight="bold", fontsize=18)
+    ax_sino.set_title("Dynamic Sinogram", fontweight="bold", fontsize=18, pad=8)
 
     # Add vertical indicator lines pointing to the timestamps from Row 1
     # for t_target in timestamps:

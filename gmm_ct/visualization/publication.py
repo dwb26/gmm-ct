@@ -960,36 +960,36 @@ def plot_temporal_gmm_comparison(
                 )
                 for k in range(K)
             ]
-            legend_elements.extend([
-                Line2D(
-                    [0],
-                    [0],
-                    marker="o",
-                    color="w",
-                    markerfacecolor="r",
-                    markersize=8,
-                    alpha=0.7,
-                    label="Source",
-                ),
-                Line2D(
-                    [0],
-                    [0],
-                    marker="o",
-                    color="w",
-                    markerfacecolor="b",
-                    markersize=6,
-                    alpha=0.5,
-                    label="Detectors",
-                ),
-                Line2D(
-                    [0],
-                    [0],
-                    color="gold",
-                    linewidth=2,
-                    alpha=0.1,
-                    label="Rays",
-                ),
-            ])
+            # legend_elements.extend([
+            #     Line2D(
+            #         [0],
+            #         [0],
+            #         marker="o",
+            #         color="w",
+            #         markerfacecolor="r",
+            #         markersize=8,
+            #         alpha=0.7,
+            #         label="Source",
+            #     ),
+            #     Line2D(
+            #         [0],
+            #         [0],
+            #         marker="o",
+            #         color="w",
+            #         markerfacecolor="b",
+            #         markersize=6,
+            #         alpha=0.5,
+            #         label="Detectors",
+            #     ),
+            #     Line2D(
+            #         [0],
+            #         [0],
+            #         color="gold",
+            #         linewidth=2,
+            #         alpha=0.1,
+            #         label="Rays",
+            #     ),
+            # ])
             ax_left.legend(
                 handles=legend_elements,
                 loc="upper left",
@@ -2780,6 +2780,273 @@ def plot_projection_modes(
 
     # ------------------------------------------------------------------
     # Figure title and save
+    # ------------------------------------------------------------------
+    if title is not None:
+        fig.suptitle(title, fontweight='bold', fontsize=_FS_SUPTITLE)
+
+    plt.tight_layout()
+    if filename:
+        save_figure(fig, filename)
+    return fig
+
+
+from matplotlib.lines import Line2D
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+
+def plot_projection_modes_and_trajectories(
+    proj_mixture,
+    t,
+    receivers,
+    model,
+    res,
+    proj_individuals=None,
+    time_snapshot_indices=None,
+    component_colors=None,
+    component_labels=None,
+    title=None,
+    filename=None,
+    t_range=None,
+):
+    """
+    3-Stage Projection & Trajectory Figure for Poster Presentation.
+
+    Layout: 2 x 6 GridSpec
+      - [:, 0:2] : 2x2 Snapshot panels (Projection Intensity vs. Detector Height)
+      - [:, 2:4] : Mixture Modes vs. Time (Raw Peak Detection)
+      - [:, 4:6] : Mode Data + Optimized Estimates (Fitted Trajectory Curves)
+    """
+    # ------------------------------------------------------------------
+    # Input coercion & Receiver Coordinates
+    # ------------------------------------------------------------------
+    proj_mix = np.asarray(
+        proj_mixture.detach().cpu().numpy()
+        if hasattr(proj_mixture, 'detach') else proj_mixture
+    )
+    t_np = np.asarray(
+        t.detach().cpu().numpy() if hasattr(t, 'detach') else t
+    )
+    n_times, n_rcvrs = proj_mix.shape
+
+    rcvr_y_desc = np.array([r[1].item() for r in receivers[0]])
+    rcvr_y_asc  = rcvr_y_desc[::-1].copy()
+    y_min, y_max = rcvr_y_asc[0], rcvr_y_asc[-1]
+
+    proj_mix_fl = proj_mix[:, ::-1].copy()
+
+    indiv_fl = []
+    if proj_individuals is not None:
+        for pk in proj_individuals:
+            pk_np = np.asarray(pk.detach().cpu().numpy()
+                               if hasattr(pk, 'detach') else pk)
+            indiv_fl.append(pk_np[:, ::-1].copy())
+
+    K = len(indiv_fl) if indiv_fl else model.N
+
+    # ------------------------------------------------------------------
+    # Defaults & Palette
+    # ------------------------------------------------------------------
+    if time_snapshot_indices is None:
+        time_snapshot_indices = [80, 90, 100, 110]
+    if len(time_snapshot_indices) != 4:
+        raise ValueError("time_snapshot_indices must contain exactly 4 indices.")
+
+    if component_colors is None:
+        component_colors = [plt.cm.rainbow(v) for v in np.linspace(0, 1, max(K, 1))]
+
+    if component_labels is None:
+        component_labels = [rf'$G_{{{k+1}}}$' for k in range(K)]
+
+    panel_accent_colors = ['tab:red', 'tab:blue', 'tab:green', 'tab:orange']
+
+    # ------------------------------------------------------------------
+    # GridSpec Layout setup (2 x 6)
+    # ------------------------------------------------------------------
+    # fig = plt.figure(figsize=(24, 7))
+    # gs  = GridSpec(2, 6, figure=fig, hspace=0.35, wspace=0.45)
+
+    # snap_axes = [
+    #     fig.add_subplot(gs[0, 0]),
+    #     fig.add_subplot(gs[0, 1]),
+    #     fig.add_subplot(gs[1, 0]),
+    #     fig.add_subplot(gs[1, 1]),
+    # ]
+    # ax_modes = fig.add_subplot(gs[:, 2:4])
+    # ax_fit   = fig.add_subplot(gs[:, 4:6])
+    
+    # ------------------------------------------------------------------
+    # GridSpec Layout setup (Nested GridSpecs for custom column gaps)
+    # ------------------------------------------------------------------
+    fig = plt.figure(figsize=(24, 7))
+
+    # Outer 1x3 GridSpec to control large gaps between the three main sections
+    # wspace=0.35 creates a wide gap between the snapshot block, middle, and right panels
+    outer_gs = GridSpec(1, 3, figure=fig, width_ratios=[2, 1, 1], wspace=0.25)
+
+    # 1. Left section: 2x2 grid for snapshots
+    # wspace=0.15 tightens the horizontal gap between the left snapshot subplots
+    gs_left = GridSpecFromSubplotSpec(2, 2, subplot_spec=outer_gs[0], hspace=0.35, wspace=0.15)
+    snap_axes = [
+        fig.add_subplot(gs_left[0, 0]),
+        fig.add_subplot(gs_left[0, 1]),
+        fig.add_subplot(gs_left[1, 0]),
+        fig.add_subplot(gs_left[1, 1]),
+    ]
+
+    # 2. Middle and Right section: Nest a 1x2 GridSpec inside outer_gs[1:]
+    # wspace=0.08 pulls the middle and right panels closely together
+    gs_right_block = GridSpecFromSubplotSpec(1, 2, subplot_spec=outer_gs[1:], wspace=0.08)
+    ax_modes = fig.add_subplot(gs_right_block[0])
+    ax_fit   = fig.add_subplot(gs_right_block[1])
+    
+
+    y_max_global = proj_mix_fl.max() * 1.12
+
+    # ------------------------------------------------------------------
+    # Panel 1: Snapshot panels (2x2)
+    # ------------------------------------------------------------------
+    for col, (ax, idx) in enumerate(zip(snap_axes, time_snapshot_indices)):
+        t_val = t_np[idx]
+        mix_row = proj_mix_fl[idx]
+
+        if indiv_fl:
+            for k, (p_k, color, label) in enumerate(
+                zip(indiv_fl, component_colors, component_labels)
+            ):
+                ax.plot(
+                    rcvr_y_asc, p_k[idx],
+                    color=color, lw=1.5, zorder=4,
+                    label=label if col == 0 else None,
+                )
+                ax.fill_between(rcvr_y_asc, p_k[idx], alpha=0.12, color=color)
+
+        ax.plot(rcvr_y_asc, mix_row, color='black', lw=1.5, zorder=5)
+
+        modes_snap = _detect_modes_3pt(mix_row, rcvr_y_asc)
+        if modes_snap:
+            peaks_snap = [mix_row[np.argmin(np.abs(rcvr_y_asc - m))]
+                          for m in modes_snap]
+            ax.vlines(modes_snap, 0, peaks_snap,
+                      color='darkred', linestyle='--', lw=1.0, zorder=6)
+            ax.plot(modes_snap, np.zeros(len(modes_snap)),
+                    marker='o', lw=0, color=panel_accent_colors[col],
+                    ms=6, zorder=7, label="Modes" if col == 0 else None)
+
+        ax.set_xlim(y_min, y_max)
+        ax.set_ylim(-0.02 * y_max_global, y_max_global)
+        ax.set_title(f'$t = {t_val:.3f}$ s', fontweight='bold', fontsize=16)
+        ax.grid(True, lw=0.4, alpha=0.4)
+        ax.tick_params(axis='both', which='major', labelsize=_FS_TICK)
+        
+        if col >= 2:
+            ax.set_xlabel('Detector height (m)', fontsize=_FS_LABEL, fontweight='bold')
+        if col % 2 == 0:
+            ax.set_ylabel('Projection intensity', fontsize=_FS_LABEL, fontweight='bold')
+        if col < 2:
+            ax.tick_params(labelbottom=False)
+        if col % 2 == 1:
+            ax.tick_params(labelleft=False)
+
+    snap_axes[0].legend(fontsize=_FS_LEGEND, loc='upper left')
+
+    # ------------------------------------------------------------------
+    # Panel 2: Mixture Modes vs. Time
+    # ------------------------------------------------------------------
+    snap_set = set(time_snapshot_indices)
+    color_map = {idx: panel_accent_colors[i]
+                 for i, idx in enumerate(time_snapshot_indices)}
+
+    for n_t in range(n_times):
+        modes_t = _detect_modes_3pt(proj_mix_fl[n_t], rcvr_y_asc)
+        if not modes_t:
+            continue
+        color = color_map.get(n_t, 'black')
+        ax_modes.scatter(
+            np.full(len(modes_t), t_np[n_t]),
+            modes_t,
+            s=10, color=color, zorder=5 if n_t in snap_set else 4,
+        )
+
+    ax_modes.set_xlabel(r'Time (s)', fontsize=_FS_LABEL, fontweight='bold')
+    ax_modes.set_ylabel(r'Detector height (m)', fontsize=_FS_LABEL, fontweight='bold')
+    ax_modes.set_title('Observed Mode Data', fontweight='bold', fontsize=_FS_TITLE)
+    ax_modes.tick_params(axis='both', which='major', labelsize=_FS_TICK)
+
+    if t_range is not None:
+        t_lo, t_hi = t_range[0], t_range[1]
+    else:
+        t_with_modes = [
+            t_np[n_t] for n_t in range(n_times)
+            if _detect_modes_3pt(proj_mix_fl[n_t], rcvr_y_asc)
+        ]
+        t_lo, t_hi = (t_with_modes[0], t_with_modes[-1]) if t_with_modes else (t_np[0], t_np[-1])
+        
+    t_margin = 0.10 * (t_hi - t_lo)
+    ax_modes.set_xlim(t_lo - t_margin, t_hi + t_margin)
+    ax_modes.set_ylim(y_min - 0.05 * (y_max - y_min), y_max + 0.05 * (y_max - y_min))
+    ax_modes.grid(True, lw=0.4, alpha=0.4)
+
+    legend_handles = [
+        Line2D([0], [0], marker='o', color='black', lw=0, ms=7, label='Mixture modes'),
+    ] + [
+        Line2D([0], [0], marker='o', color=panel_accent_colors[i], lw=0, ms=7,
+               label=f'$t = {t_np[time_snapshot_indices[i]]:.3f}$ s')
+        for i in range(4)
+    ]
+    ax_modes.legend(handles=legend_handles, fontsize=_FS_LEGEND - 2, loc='best')
+
+    # ------------------------------------------------------------------
+    # Panel 3: Fitted Trajectories (Optimized Estimates)
+    # ------------------------------------------------------------------
+    theta_dict = model.map_from_tensor_to_dict(res.x)
+    full_theta = {'v0s': theta_dict['v0s']}
+    for key in ('x0s', 'a0s', 'omegas', 'alphas', 'U_skews'):
+        if key in theta_dict:
+            full_theta[key] = theta_dict[key]
+        elif hasattr(model, 'theta_dict_init') and key in model.theta_dict_init:
+            full_theta[key] = model.theta_dict_init[key]
+        elif hasattr(model, 'theta_fixed') and key in model.theta_fixed:
+            full_theta[key] = model.theta_fixed[key]
+
+    gauss_colors = plt.cm.rainbow(np.linspace(0, 1, model.N))
+    r_maxs_list = model.map_velocities_to_maximising_receivers(full_theta)
+    t_all = model.t_observable.cpu().numpy()
+    min_rcvr_h = model.receivers[0][-1][1].item()
+    max_rcvr_h = model.receivers[0][0][1].item()
+
+    for k in range(model.N):
+        pred_h = r_maxs_list[k][:, 1].detach().cpu().numpy()
+        mask = (pred_h >= min_rcvr_h) & (pred_h <= max_rcvr_h)
+        ax_fit.plot(
+            t_all[mask], pred_h[mask],
+            color=gauss_colors[k], lw=1.5,
+            label=rf'$\widehat{{\mathbf{{r}}}}[\mathbf{{\eta}}_{{{k+1}}}^*](t)$', zorder=3
+        )
+
+        rcvrs_k = model.maximising_rcvrs[k]
+        if not rcvrs_k:
+            continue
+        rcvr_heights = torch.zeros(len(rcvrs_k), dtype=torch.float64, device=model.device)
+        for i in range(len(rcvrs_k)):
+            rcvr_heights[i] = rcvrs_k[i][1]
+
+        t_obs_k = model.t_obs_by_cluster[k]
+        if isinstance(t_obs_k, list):
+            t_obs_k = torch.tensor(t_obs_k, dtype=torch.float64, device=model.device)
+
+        ax_fit.scatter(t_obs_k.cpu(), rcvr_heights.cpu(), s=10, color='black', zorder=5)
+
+    ax_fit.set_xlabel(r'Time (s)', fontsize=_FS_LABEL, fontweight='bold')
+    ax_fit.set_ylabel('', fontsize=_FS_LABEL, fontweight='bold')
+    ax_fit.set_yticklabels([])
+    ax_fit.set_title('Mode Data + Fitted Trajectories', fontweight='bold', fontsize=_FS_TITLE)
+    ax_fit.set_xlim(t_lo - t_margin, t_hi + t_margin)
+    ax_fit.set_ylim(y_min - 0.05 * (y_max - y_min), y_max + 0.05 * (y_max - y_min))
+    ax_fit.tick_params(axis='both', which='major', labelsize=_FS_TICK)
+    ax_fit.grid(True, lw=0.4, alpha=0.4)
+    ax_fit.legend(fontsize=_FS_LEGEND, loc='best', ncol=max(1, model.N // 3))
+
+    # ------------------------------------------------------------------
+    # Output
     # ------------------------------------------------------------------
     if title is not None:
         fig.suptitle(title, fontweight='bold', fontsize=_FS_SUPTITLE)

@@ -149,7 +149,7 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
     else:
         proj_data_input = proj_data
 
-    soln_dict = model.fit(proj_data_input, t)
+    soln_dict, best_res = model.fit(proj_data_input, t)
 
     # --- Save estimated parameters (markdown) ---
     export_parameters(
@@ -232,6 +232,7 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
                 device=device,
                 experiment_dir=experiment_dir,
                 analysis_cfg=cfg.analysis,
+                res=best_res,
             )
     else:
         elapsed = wall_clock() - start
@@ -265,6 +266,7 @@ def analyse_results(
     device: torch.device,
     experiment_dir: Path,
     analysis_cfg: AnalysisConfig | None = None,
+    res: dict | None = None,
 ):
     """Run error analysis and generate comparison plots.
 
@@ -307,6 +309,7 @@ def analyse_results(
         plot_projection_modes,
         plot_sinogram,
         reorder_theta_to_match_true,
+        plot_projection_modes_and_trajectories,
     )
     from .visualization.animations import animate_GMM_motion
 
@@ -371,18 +374,18 @@ def analyse_results(
 
         if theta_init is not None:
             plot_temporal_gmm_comparison(
-                sources, receivers, theta_true, theta_init, t, N, d,
-                time_indices=time_indices,
+                sources=sources, 
+                receivers=receivers, 
+                theta_true=theta_true, 
+                theta_est=theta_init, 
+                t=t, 
+                K=N, 
+                d=d,
+                # time_indices=time_indices,
                 filename=experiment_dir / "initial_temporal_gmm_comparison.pdf",
                 title="Stage 2 Initialization",
             )
 
-        # plot_temporal_gmm_comparison(
-        #     sources, receivers, theta_true, theta_est, t, N, d,
-        #     time_indices=time_indices,
-        #     filename=experiment_dir / "temporal_gmm_comparison.pdf",
-        #     title="Reconstruction",
-        # )
         plot_temporal_gmm_comparison(
             sources=sources,
             receivers=receivers,
@@ -402,14 +405,25 @@ def analyse_results(
         plot_projection_modes(proj_2d, t, receivers,
                               title="Projection Modes",
                               filename=experiment_dir / "projection_modes.pdf")
+        
+        plot_projection_modes_and_trajectories(
+            proj_mixture=proj_2d,
+            t=t,
+            receivers=receivers,
+            model=model,
+            res=res,
+            filename=experiment_dir / "fitted_projection_modes.pdf",
+        )
+        
+        
 
     # --- Animation ---
-    if not analysis_cfg.skip_animations:
-        logger.info("Generating animation...")
-        anim = animate_temporal_gmm_comparison(
-            sources, receivers, theta_true, theta_est, t, N, d,
-            filename=experiment_dir / "temporal_gmm_comparison.mp4",
-        )
+    # if not analysis_cfg.skip_animations:
+    #     logger.info("Generating animation...")
+    #     anim = animate_temporal_gmm_comparison(
+    #         sources, receivers, theta_true, theta_est, t, N, d,
+    #         filename=experiment_dir / "temporal_gmm_comparison.mp4",
+    #     )
 
     logger.info("All analysis outputs in: %s", experiment_dir)
 
