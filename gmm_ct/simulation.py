@@ -134,7 +134,7 @@ def run_simulation(cfg: SimulateConfig) -> Path:
     logger.info(f"Generating the plots and animations...")
     animate_simulation(
         sim_dir=experiment_dir,
-        output_path=experiment_dir / 'simulation_2d.mp4'
+        output_path=experiment_dir / 'simulation_2d.mp4',
     )
     export_poster_gmm_figure(experiment_dir)
     export_poster_snapshot_sinogram_figure(experiment_dir)

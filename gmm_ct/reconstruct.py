@@ -1,30 +1,16 @@
 """
-Reconstruction (and optional analysis) runner for GMM-CT.
+Reconstruction and analysis runner for GMM-CT.
 
 Loads observed projection data from disk, instantiates ``GMM_reco`` from a
 YAML config, runs the 4-stage reconstruction pipeline, saves the results,
 and — when ground-truth data is available — automatically runs error
 analysis and generates publication-quality plots.
-
-Usage (Python API)::
-
-    from gmm_ct.reconstruct import run_reconstruction
-    from gmm_ct.config.yaml_config import load_reconstruct_config
-
-    cfg = load_reconstruct_config("configs/reconstruct.yaml")
-    run_reconstruction(cfg)
-
-Usage (CLI)::
-
-    gmm-ct reconstruct --config configs/reconstruct.yaml
-    gmm-ct reconstruct --config configs/reconstruct.yaml --skip-analysis
-    gmm-ct reconstruct --config configs/reconstruct.yaml --skip-animations
 """
 
+import logging
 from datetime import datetime
 from pathlib import Path
 from time import time as wall_clock
-import logging
 
 import numpy as np
 import torch
@@ -36,24 +22,15 @@ from .utils import export_parameters
 logger = logging.getLogger(__name__)
 
 
-def _load_projection_data(data_path: str, device: torch.device):
-    """Load projection data and time vector from disk.
+# ======================================================================
+# Data & Ground-Truth Loading Helpers
+# ======================================================================
 
-    Supports ``.pt`` (PyTorch) and ``.npy`` (NumPy) files.
-
-    For ``.pt`` files the expected format is a dict with keys
-    ``"projections"`` and ``"times"``.
-
-    For ``.npy`` files a companion ``times.npy`` is expected in the same
-    directory.
-
-    Returns
-    -------
-    proj_data : torch.Tensor
-        Projection measurements, shape ``(n_times, n_receivers)``.
-    t : torch.Tensor
-        Time vector, shape ``(n_times,)``.
-    """
+def _load_projection_data(
+    data_path: str, 
+    device: torch.device
+) -> tuple[list[torch.Tensor], torch.Tensor]:
+    """Load projection measurements and time steps (.pt or .npy format)."""
     path = Path(data_path)
     if not path.exists():
         raise FileNotFoundError(f"Projection data not found: {path}")
@@ -67,33 +44,36 @@ def _load_projection_data(data_path: str, device: torch.device):
         proj_data = torch.tensor(proj_np, dtype=torch.float64, device=device)
         times_path = path.parent / "times.npy"
         if not times_path.exists():
-            raise FileNotFoundError(
-                f"Expected companion file {times_path} alongside {path}"
-            )
-        t = torch.tensor(
-            np.load(times_path), dtype=torch.float64, device=device
-        )
+            raise FileNotFoundError(f"Expected companion file {times_path} alongside {path}")
+        t = torch.tensor(np.load(times_path), dtype=torch.float64, device=device)
     else:
-        raise ValueError(
-            f"Unsupported data format '{path.suffix}'. Use .pt or .npy"
-        )
-
+        raise ValueError(f"Unsupported data format '{path.suffix}'. Use .pt or .npy")
+    
+    # Ensure single-source 2D tensor is wrapped in a list expected by forward model
+    if isinstance(proj_data, torch.Tensor) and proj_data.dim() == 2:
+        proj_data = [proj_data]
+        
     return proj_data, t
 
 
+def _try_load_ground_truth(data_path: Path, device: torch.device) -> None:
+    """Attempt to load companion ground_truth.pt from the input data directory."""
+    gt_path = data_path.parent / "ground_truth.pt"
+    if gt_path.exists():
+        try:
+            return torch.load(gt_path, map_location=device, weights_only=False)
+        except Exception as e:
+            logger.warning("Failed to load ground_truth.pt despite file existing %s", e)
+    return None
+
+
+# ======================================================================
+# Orchestration Engine
+# ======================================================================
+
 def run_reconstruction(cfg: ReconstructConfig) -> dict:
-    """Run the reconstruction pipeline from a YAML-driven config.
-
-    Parameters
-    ----------
-    cfg : ReconstructConfig
-        Fully parsed reconstruction configuration.
-
-    Returns
-    -------
-    soln_dict : dict
-        Optimised parameter dictionary.
-    """
+    """Run the full reconstruction pipeline and optional analysis from config 
+    (though this to be decoupled)."""
     start = wall_clock()
 
     # --- Device ---
