@@ -76,6 +76,7 @@ logs/
 *.mp4
 *.avi
 *.log
+!docs/temporal_gmm_comparison-1.png
 
 # ==============================================================================
 # LaTeX & Manuscript Build Artifacts
