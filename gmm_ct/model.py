@@ -1031,10 +1031,12 @@ class GMM_reco:
             
         for k in range(self.N):
             v0_k = theta_dict['v0s'][k]
+            x0_k = self.theta_fixed['x0s'][k]
+            a0_k = self.theta_fixed['a0s'][k]
             
             # if not self.theta_fixed:
-            x0_k = torch.tensor([1.0, 1.0], dtype=torch.float64)
-            a0_k = torch.tensor([0.0, -9.8], dtype=torch.float64)
+            # x0_k = torch.tensor([1.0, 1.0], dtype=torch.float64)
+            # a0_k = torch.tensor([0.0, -9.8], dtype=torch.float64)
 
             # else:
                 # x0_k = self.theta_fixed['x0s'][k]

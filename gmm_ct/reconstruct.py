@@ -142,7 +142,6 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
     
     elapsed = wall_clock() - start
     logger.info("Recontruction finished in %.1fs", elapsed)
-    logger.info("Estimated omegas (ω): %s", [f"{w.item():.4f}" for w in soln_dict["omegas"]])
     
     # --- Analysis & Figure Generation
     if gt is not None:
@@ -173,319 +172,33 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
             experiment_dir / "results.pt",
         )
            
-        if cfg.analysis.enabled:
-            logger.info("Running automatic error analysis and plot generation...")
-            analyse_results(
-                theta_true=theta_true,
-                theta_est=soln_dict,
-                theta_init=theta_init,
-                theta_stage1_init=theta_stage1_init,
-                proj_data=proj_data,
-                t=t,
-                sources=sources,
-                receivers=receivers,
-                d=gt_cfg.get("d", 2),
-                N=cfg.n_gaussians,
-                omega_min=cfg.physics.omega_range[0],
-                omega_max=cfg.physics.omega_range[1],
-                device=device,
-                experiment_dir=experiment_dir,
-                analysis_cfg=cfg.analysis,
-                res=best_res,
-            )
-        else:
-            logger.info("No ground_truth.pt found alongside data; post-analysis skipped.")
+    #     if cfg.analysis.enabled:
+    #         logger.info("Running automatic error analysis and plot generation...")
+    #         analyze_results(
+    #             theta_true=theta_true,
+    #             theta_est=soln_dict,
+    #             theta_init=theta_init,
+    #             theta_stage1_init=theta_stage1_init,
+    #             proj_data=proj_data,
+    #             t=t,
+    #             sources=sources,
+    #             receivers=receivers,
+    #             d=gt_cfg.get("d", 2),
+    #             N=cfg.n_gaussians,
+    #             omega_min=cfg.physics.omega_range[0],
+    #             omega_max=cfg.physics.omega_range[1],
+    #             device=device,
+    #             experiment_dir=experiment_dir,
+    #             analysis_cfg=cfg.analysis,
+    #             res=best_res,
+    #         )
+    # else:
+    #     logger.info("No ground_truth.pt found alongside data; post-analysis skipped.")
             
-        return soln_dict
+    return soln_dict
 
 
 # ======================================================================
-# Analysis
+# Post-Reconstruction Analysis & Visualizations
 # ======================================================================
 
-def analyse_results(
-    *,
-    theta_true: dict,
-    theta_est: dict,
-    theta_init: dict | None,
-    theta_stage1_init: dict | None = None,
-    proj_data=None,
-    t: torch.Tensor,
-    sources,
-    receivers,
-    d: int,
-    N: int,
-    omega_min: float,
-    omega_max: float,
-    device: torch.device,
-    experiment_dir: Path,
-    analysis_cfg: AnalysisConfig | None = None,
-    res: dict | None = None,
-):
-    """Run error analysis and generate comparison plots.
-
-    This is the logic formerly in ``scripts/analyse.py``, factored out
-    so it can be called directly after reconstruction.
-
-    Parameters
-    ----------
-    theta_true : dict
-        Ground-truth parameter dictionary.
-    theta_est : dict
-        Estimated parameter dictionary (will be reordered to match true).
-    theta_init : dict or None
-        Initial-guess parameter dictionary (will also be reordered).
-    proj_data : list of torch.Tensor
-        Observed projection data.
-    t : torch.Tensor
-        Time vector.
-    sources, receivers
-        CT geometry tensors.
-    d : int
-        Dimensionality.
-    N : int
-        Number of Gaussians.
-    omega_min, omega_max : float
-        Angular velocity search bounds.
-    device : torch.device
-        Computation device.
-    experiment_dir : Path
-        Directory for saving outputs.
-    analysis_cfg : AnalysisConfig, optional
-        Fine-grained control over which analysis steps to run.
-    """
-    import matplotlib.pyplot as plt
-    from .visualization.publication import (
-        animate_temporal_gmm_comparison,
-        plot_acquisition_geometry_exact,
-        plot_individual_gaussian_reconstruction,
-        plot_temporal_gmm_comparison,
-        plot_projection_modes,
-        plot_sinogram,
-        reorder_theta_to_match_true,
-        plot_projection_modes_and_trajectories,
-    )
-    from .visualization.animations import animate_GMM_motion
-
-    if analysis_cfg is None:
-        analysis_cfg = AnalysisConfig()
-
-    # --- Match estimated Gaussians to true (by velocity) for color-coding ---
-    theta_est, matching_indices = reorder_theta_to_match_true(
-        theta_true, theta_est, N,
-    )
-    logger.info("Gaussian matching (est → true): %s", matching_indices)
-    if theta_init is not None:
-        theta_init, _ = reorder_theta_to_match_true(
-            theta_true, theta_init, N,
-        )
-
-    # --- Error analysis ---
-    if not analysis_cfg.skip_errors:
-        x0s = theta_true["x0s"]
-        a0s = theta_true["a0s"]
-
-        model = GMM_reco(
-            d, N, sources, receivers, x0s, a0s,
-            omega_min, omega_max, device=device,
-            output_dir=experiment_dir,
-        )
-
-        errors_init = _compute_parameter_errors(theta_true, theta_init, N)
-        errors_final = _compute_parameter_errors(theta_true, theta_est, N)
-
-        proj_init = model.generate_projections(t, theta_init)
-        proj_final = model.generate_projections(t, theta_est)
-        proj_err_init = _compute_projection_error(proj_data, proj_init)
-        proj_err_final = _compute_projection_error(proj_data, proj_final)
-
-        _print_error_summary(
-            errors_init, errors_final, proj_err_init, proj_err_final,
-        )
-        _plot_error_table(
-            errors_init, errors_final,
-            proj_err_init, proj_err_final,
-            experiment_dir / "error_analysis.pdf",
-        )
-
-    # --- Plots ---
-    if not analysis_cfg.skip_plots:
-        logger.info("Generating plots...")
-
-        time_indices = analysis_cfg.time_indices or [80, 90, 100]
-
-        plot_acquisition_geometry_exact(
-            sources, receivers, d,
-            filename=experiment_dir / "acquisition_geometry_exact.pdf",
-        )
-
-        plot_individual_gaussian_reconstruction(
-            theta_true, theta_est, N, d,
-            gaussian_indices=range(N),
-            filename=experiment_dir / "individual_gaussian_reconstruction.pdf",
-            theta_init=theta_stage1_init,
-        )
-
-        if theta_init is not None:
-            plot_temporal_gmm_comparison(
-                sources=sources, 
-                receivers=receivers, 
-                theta_true=theta_true, 
-                theta_est=theta_init, 
-                t=t, 
-                K=N, 
-                d=d,
-                # time_indices=time_indices,
-                filename=experiment_dir / "initial_temporal_gmm_comparison.pdf",
-                title="Stage 2 Initialization",
-            )
-
-        plot_temporal_gmm_comparison(
-            sources=sources,
-            receivers=receivers,
-            theta_true=theta_true,
-            theta_est=theta_est,
-            t=t,
-            K=N,
-            d=d,
-            filename=experiment_dir / "temporal_gmm_comparison.pdf",
-            title="Reconstruction",
-        )
-        
-        proj_2d = proj_data[0] if isinstance(proj_data, (list, tuple)) else proj_data
-        plot_sinogram(proj_2d, t, receivers,
-                      filename=experiment_dir / "observed_sinogram.pdf")
-        
-        plot_projection_modes(proj_2d, t, receivers,
-                              title="Projection Modes",
-                              filename=experiment_dir / "projection_modes.pdf")
-        
-        plot_projection_modes_and_trajectories(
-            proj_mixture=proj_2d,
-            t=t,
-            receivers=receivers,
-            model=model,
-            res=res,
-            filename=experiment_dir / "fitted_projection_modes.pdf",
-        )
-        
-        
-
-    # --- Animation ---
-    # if not analysis_cfg.skip_animations:
-    #     logger.info("Generating animation...")
-    #     anim = animate_temporal_gmm_comparison(
-    #         sources, receivers, theta_true, theta_est, t, N, d,
-    #         filename=experiment_dir / "temporal_gmm_comparison.mp4",
-    #     )
-
-    logger.info("All analysis outputs in: %s", experiment_dir)
-
-
-# ======================================================================
-# Error metric helpers
-# ======================================================================
-
-def _compute_parameter_errors(theta_true, theta_est, N):
-    """Compute relative L2 errors for each parameter type."""
-    errors = {}
-
-    def _rel_error(true_stack, est_stack):
-        return (torch.norm(true_stack - est_stack) / torch.norm(true_stack)).item()
-
-    for key, flatten in [("alphas", False), ("x0s", False), ("v0s", False),
-                         ("U_skews", True), ("omegas", False)]:
-        true_stack = torch.stack([
-            theta_true[key][k].flatten() if flatten else theta_true[key][k]
-            for k in range(N)
-        ])
-        est_stack = torch.stack([
-            theta_est[key][k].flatten() if flatten else theta_est[key][k]
-            for k in range(N)
-        ])
-        errors[key] = _rel_error(true_stack, est_stack)
-
-    return errors
-
-
-def _compute_projection_error(proj_true, proj_est):
-    """Relative L2 error between two sets of projections."""
-    true_flat = torch.cat([p.flatten() for p in proj_true])
-    est_flat = torch.cat([p.flatten() for p in proj_est])
-    return (torch.norm(true_flat - est_flat) / torch.norm(true_flat)).item()
-
-
-def _print_error_summary(errors_init, errors_final, proj_err_init, proj_err_final):
-    """Print a console summary of error reduction."""
-    labels = {
-        "alphas": "Amplitudes (α)",
-        "x0s": "Positions  (x₀)",
-        "v0s": "Velocities (v₀)",
-        "U_skews": "Shape      (U)",
-        "omegas": "Rotation   (ω)",
-    }
-    logger.info("Parameter errors (relative L2):")
-    logger.info("  %-22s %12s  %12s  %12s", "", "Init", "Final", "Improvement")
-    for key in ["alphas", "x0s", "v0s", "U_skews", "omegas"]:
-        init = errors_init[key]
-        final = errors_final[key]
-        imp = 100 * (1 - final / init) if init > 0 else 0
-        logger.info("  %-22s %12.4e  %12.4e  %+11.1f%%", labels[key], init, final, imp)
-
-    imp_proj = 100 * (1 - proj_err_final / proj_err_init) if proj_err_init > 0 else 0
-    logger.info("  %-22s %12.4e  %12.4e  %+11.1f%%",
-                "Projections", proj_err_init, proj_err_final, imp_proj)
-
-
-def _plot_error_table(errors_init, errors_final, proj_err_init, proj_err_final,
-                      output_path):
-    """Save an error-comparison table as a PDF figure."""
-    import matplotlib.pyplot as plt
-
-    labels = {
-        "alphas": "Amplitudes (α)",
-        "x0s": "Initial Positions (x₀)",
-        "v0s": "Initial Velocities (v₀)",
-        "U_skews": "Shape Matrices (U)",
-        "omegas": "Angular Velocities (ω)",
-    }
-
-    header = ["Parameter", "Init Error", "Final Error", "Improvement", "Reduction"]
-    rows = [header]
-
-    for key in ["alphas", "x0s", "v0s", "U_skews", "omegas"]:
-        init = errors_init[key]
-        final = errors_final[key]
-        imp = 100 * (1 - final / init) if init > 0 else 0
-        red = init / final if final > 0 else np.inf
-        rows.append([labels[key], f"{init:.4e}", f"{final:.4e}",
-                     f"{imp:.1f}%", f"{red:.1f}×"])
-
-    imp_proj = 100 * (1 - proj_err_final / proj_err_init) if proj_err_init > 0 else 0
-    red_proj = proj_err_init / proj_err_final if proj_err_final > 0 else np.inf
-    rows.append(["Projections", f"{proj_err_init:.4e}", f"{proj_err_final:.4e}",
-                 f"{imp_proj:.1f}%", f"{red_proj:.1f}×"])
-
-    fig, ax = plt.subplots(figsize=(12, 5))
-    ax.axis("off")
-    table = ax.table(cellText=rows, cellLoc="center", bbox=[0, 0, 1, 1])
-    table.auto_set_font_size(False)
-    table.set_fontsize(12)
-    table.scale(1, 2.4)
-
-    for j in range(len(header)):
-        table[(0, j)].set_facecolor("#2E86AB")
-        table[(0, j)].set_text_props(weight="bold", color="white", fontsize=13)
-        table[(len(rows) - 1, j)].set_facecolor("#E8E8E8")
-        table[(len(rows) - 1, j)].set_text_props(weight="bold")
-
-    for i in range(1, len(rows) - 1):
-        if i % 2 == 0:
-            for j in range(len(header)):
-                table[(i, j)].set_facecolor("#F5F5F5")
-
-    ax.set_title("Error Analysis: Initialisation vs Optimisation",
-                 fontweight="bold", fontsize=18, pad=12)
-    fig.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close()
-    logger.info("Error table saved: %s", output_path)
