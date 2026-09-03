@@ -77,72 +77,59 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
     start = wall_clock()
 
     # --- Device ---
-    if cfg.device:
-        device = torch.device(cfg.device)
-    else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Device: %s", device)
+    device = torch.device(
+        cfg.device if cfg.device else ("cuda" if torch.cuda.is_available() else "cpu")
+    )
+    logger.info("Device selected: %s", device)
 
-    # --- Load observed data ---
-    proj_data, t = _load_projection_data(cfg.data_path, device)
-    logger.info("Loaded projections: %s", proj_data.shape)
-    logger.info("Time steps: %d  (%.3f – %.3fs)",
-                t.shape[0], t[0].item(), t[-1].item())
+    # --- Load Projection Measurements ---
+    data_path = Path(cfg.data_path)
+    proj_data, t = _load_projection_data(data_path, device)
+    logger.info("Loaded projections shape: %s", proj_data[0].shape)
+    logger.info("Time mesh: %d steps (%.3fs – %.3fs)", t.shape[0], t[0].item(), t[-1].item())
+    
+    # --- Fetch Ground Truth if Available ---
+    gt = _try_load_ground_truth(data_path, device)
+    seed_str = str(gt.get("config", {}).get("seed", "unknown")) if gt else "unknown"
 
-    # --- Pre-load ground truth (needed for seed + diagnostic plots) ---
-    _data_dir_early = Path(cfg.data_path).parent
-    _gt_path_early = _data_dir_early / "ground_truth.pt"
-    _gt_early = None
-    _seed_str = "unknown"
-    if _gt_path_early.exists():
-        try:
-            _gt_early = torch.load(_gt_path_early, map_location=device,
-                                   weights_only=False)
-            _seed = _gt_early.get("config", {}).get("seed", None)
-            if _seed is not None:
-                _seed_str = str(_seed)
-        except Exception:
-            pass  # ground truth unavailable; fall back gracefully
-
-    # --- Output directory (created before fit so diagnostic plots land here) ---
+    # --- Output Directory Management ---
     N = cfg.n_gaussians
     out_dir = Path(cfg.output.directory)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    experiment_dir = out_dir / f"{timestamp}_seed{_seed_str}_N{N}"
+    
+    if getattr(cfg.output, "use_timestamp", False):
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder_name = f"{timestamp}_seed{seed_str}_N{N}"
+    else:
+        folder_name = f"reco_seed{seed_str}_N{N}"
+        
+    experiment_dir = out_dir / folder_name
     experiment_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Instantiate model, pointing its output_dir at the experiment dir ---
+    # --- Model Instantiation ---
     model = GMM_reco.from_config(cfg)
     model.output_dir = experiment_dir
-    if _gt_early is not None:
-        try:
-            model.theta_true = _gt_early["theta_true"]
-        except Exception:
-            pass
+    if gt is not None and "theta_true" in gt:
+        model.theta_true = gt["theta_true"]
 
     # --- Run reconstruction ---
-    # fit() expects proj_data in the list-of-tensors-per-source format
-    # that generate_projections returns.  If we have a single-source 2-D
-    # tensor from the data file, wrap it in a list.
-    if isinstance(proj_data, torch.Tensor) and proj_data.dim() == 2:
-        proj_data_input = [proj_data]
-    else:
-        proj_data_input = proj_data
+    logger.info("Starting GMM reconstruction optimization...")
+    soln_dict, best_res = model.fit(proj_data, t)
 
-    soln_dict, best_res = model.fit(proj_data_input, t)
-
-    # --- Save estimated parameters (markdown) ---
+    # --- Export Human-Readable Parameter Estimates ---
     export_parameters(
         soln_dict,
         experiment_dir / "estimated_parameters.md",
         title="Estimated Parameters",
     )
 
-    # --- Save reconstruction-only checkpoint ---
+    # --- Save Standalone Reconstruction Checkpoint ---
+    theta_init = getattr(model, "theta_pre_stage2", None)
+    theta_stage1_init = getattr(model, "theta_pre_stage1_5", None)
+    
     torch.save(
         {
             "theta_est": soln_dict,
-            "theta_init": getattr(model, "theta_pre_stage2", None),
+            "theta_init": theta_init,
             "config": {
                 "n_gaussians": cfg.n_gaussians,
                 "omega_range": list(cfg.physics.omega_range),
@@ -152,26 +139,25 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
         },
         experiment_dir / "reconstruction.pt",
     )
-
-    # --- Save combined results.pt and run analysis if ground truth exists ---
-    data_dir = Path(cfg.data_path).parent
-    gt_path = data_dir / "ground_truth.pt"
-    theta_init = getattr(model, "theta_pre_stage2", None)
-
-    if gt_path.exists():
-        gt = torch.load(gt_path, map_location=device, weights_only=False)
+    
+    elapsed = wall_clock() - start
+    logger.info("Recontruction finished in %.1fs", elapsed)
+    logger.info("Estimated omegas (ω): %s", [f"{w.item():.4f}" for w in soln_dict["omegas"]])
+    
+    # --- Analysis & Figure Generation
+    if gt is not None:
         gt_cfg = gt.get("config", {})
         theta_true = gt["theta_true"]
-        sources = gt["sources"]
-        receivers = gt["receivers"]
-
+        sources, receivers = gt["sources"], gt["receivers"]
+        
+        # Save unified results bundle for paper figures
         torch.save(
             {
                 "theta_true": theta_true,
                 "theta_est": soln_dict,
                 "theta_init": theta_init,
-                "theta_stage1_init": getattr(model, "theta_pre_stage1_5", None),
-                "proj_data": proj_data_input,
+                "theta_stage1_init": theta_stage1_init,
+                "proj_data": proj_data,
                 "t": t,
                 "sources": sources,
                 "receivers": receivers,
@@ -186,22 +172,15 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
             },
             experiment_dir / "results.pt",
         )
-
-        elapsed = wall_clock() - start
-        logger.info("Reconstruction complete in %.1fs", elapsed)
-        logger.info("Results saved to %s", experiment_dir)
-        logger.info("Final ω: %s",
-                    [f'{omega.item():.4f}' for omega in soln_dict['omegas']])
-
-        # --- Automatic analysis ---
+           
         if cfg.analysis.enabled:
-            logger.info("Running post-reconstruction analysis...")
+            logger.info("Running automatic error analysis and plot generation...")
             analyse_results(
                 theta_true=theta_true,
                 theta_est=soln_dict,
                 theta_init=theta_init,
-                theta_stage1_init=getattr(model, "theta_pre_stage1_5", None),
-                proj_data=proj_data_input,
+                theta_stage1_init=theta_stage1_init,
+                proj_data=proj_data,
                 t=t,
                 sources=sources,
                 receivers=receivers,
@@ -214,15 +193,10 @@ def run_reconstruction(cfg: ReconstructConfig) -> dict:
                 analysis_cfg=cfg.analysis,
                 res=best_res,
             )
-    else:
-        elapsed = wall_clock() - start
-        logger.info("Reconstruction complete in %.1fs", elapsed)
-        logger.info("Results saved to %s", experiment_dir)
-        logger.info("Final ω: %s",
-                    [f'{omega.item():.4f}' for omega in soln_dict['omegas']])
-        logger.info("ground_truth.pt not found in %s; analysis skipped", data_dir)
-
-    return soln_dict
+        else:
+            logger.info("No ground_truth.pt found alongside data; post-analysis skipped.")
+            
+        return soln_dict
 
 
 # ======================================================================
