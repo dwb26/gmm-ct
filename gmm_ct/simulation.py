@@ -3,8 +3,7 @@ Synthetic data simulation for GMM-CT.
 
 Generates projection data from a ground-truth GMM and saves it alongside
 the true parameters so that the data can later be fed into the
-reconstruction pipeline (or to any other consumer) without coupling to
-the reconstruction code.
+reconstruction pipeline without coupling to the reconstruction code.
 
 Usage (Python API)::
 
@@ -16,52 +15,46 @@ Usage (Python API)::
 
 Usage (CLI)::
 
-    gmm-ct simulate --config configs/simulate.yaml
+    gmm-ct simulate --config configs/simulate_2D.yaml
 """
 
+import logging
 from datetime import datetime
 from pathlib import Path
-from time import time as wall_clock
 
-from gmm_ct.visualization.simulate_viz import animate_simulation
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
 import torch
-
-import logging
-logger = logging.getLogger(__name__)
 
 from .config import SimulateConfig
 from .model import GMM_reco
-from .utils import generate_true_param, set_random_seeds, export_parameters
+from .utils import export_parameters, generate_true_param, set_random_seeds
+
+from gmm_ct.visualization.simulate_viz import (animate_simulation,
+                                               export_poster_gmm_figure,
+                                               export_poster_snapshot_sinogram_figure,
+)                                         
+
+logger = logging.getLogger(__name__)
 
 
 def run_simulation(cfg: SimulateConfig) -> Path:
-    """Generate synthetic projection data from a YAML-driven config.
+    """Generate synthetic projection data from a YAML-driven config."""
 
-    Parameters
-    ----------
-    cfg : SimulateConfig
-        Fully parsed simulation configuration.
-
-    Returns
-    -------
-    Path
-        Directory where outputs were written.
-    """
-
-    # --- Reproducibility ---
+    # --- Reproducibility & Device ---
     set_random_seeds(cfg.simulation.seed)
+    device = torch.device(
+        cfg.device if cfg.device else ("cuda" if torch.cuda.is_available() else "cpu")
+    )
 
-    # --- Device ---
-    if cfg.device:
-        device = torch.device(cfg.device)
-    else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # --- Geometry ---
+    # --- Geometry & Physics ---
     sources, receivers = cfg.geometry.to_tensors(device)
     d = cfg.geometry.dimensionality
 
-    # --- Physics ---
     N = cfg.n_gaussians
     x0s, a0s = cfg.physics.to_tensors(N, device)
     omega_min, omega_max = cfg.physics.omega_range
@@ -80,12 +73,12 @@ def run_simulation(cfg: SimulateConfig) -> Path:
         cfg.simulation.initial_velocity, dtype=torch.float64, device=device
     )
     # generate_true_param also takes x0, v0, a0 base vectors
-    dt = cfg.simulation.duration / (cfg.simulation.n_projections - 1)
     theta_true = generate_true_param(
         d, N, x0s[0], v_base, a0s[0], omega_min, omega_max, device=device,
     )
 
     # --- Generate projection data ---
+    logger.info(f"Generating projections...")
     model = GMM_reco(
         d, N, sources, receivers, x0s, a0s,
         omega_min, omega_max, device=device,
@@ -94,11 +87,15 @@ def run_simulation(cfg: SimulateConfig) -> Path:
 
     # --- Output directory ---
     out_dir = Path(cfg.output.directory)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    experiment_dir = out_dir / f"{timestamp}_seed{cfg.simulation.seed}_N{N}"
+    if getattr(cfg.output, "use_timestamp", False):
+        folder_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_seed{cfg.simulation.seed}_N{N}"
+    else:
+        folder_name = f"sim_seed{cfg.simulation.seed}_N{N}"
+    
+    experiment_dir = out_dir / folder_name
     experiment_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Save projections (the "observed" data for reconstruction) ---
+    # --- Save projections ---
     proj_tensor = model.process_projections(proj_data)
     torch.save(
         {
@@ -108,7 +105,7 @@ def run_simulation(cfg: SimulateConfig) -> Path:
         experiment_dir / "projections.pt",
     )
 
-    # --- Save ground truth (kept separate — not needed for reconstruction) ---
+    # --- Save ground truth ---
     torch.save(
         {
             "theta_true": theta_true,
@@ -132,29 +129,13 @@ def run_simulation(cfg: SimulateConfig) -> Path:
         experiment_dir / "true_parameters.md",
         title="Ground Truth Parameters",
     )
-    
-    # from gmm_ct.visualization import animate_simulation
-    from gmm_ct.visualization import export_poster_gmm_figure, export_poster_snapshot_sinogram_figure
 
-    # Returns the FuncAnimation object; also saves to mp4 if output_path is given
-    # _ = animate_simulation(
-        # experiment_dir,
-        # output_path=experiment_dir / 'simulation_2d.mp4'
-    # )
-    
-    # from gmm_ct.visualization.simulate_viz import animate_simulation_interactive
-    # animate_simulation_interactive(
-    #     experiment_dir,
-    #     output_path=experiment_dir / "simulation_3d_interactive.html",
-    #     upsample=8,
-    #     show_trajectories=True,
-    #     detector_panel=True,
-    # )
-    
-    # logger.info(f"Simulated data saved to {experiment_dir}")
-    
-    # from gmm_ct.visualization.simulate_viz import animate_simulation
-    
+    # --- Visualizations ---
+    logger.info(f"Generating the plots and animations...")
+    animate_simulation(
+        sim_dir=experiment_dir,
+        output_path=experiment_dir / 'simulation_2d.mp4'
+    )
     export_poster_gmm_figure(experiment_dir)
     export_poster_snapshot_sinogram_figure(experiment_dir)
 

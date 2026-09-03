@@ -815,7 +815,8 @@ def animate_simulation(
 
         return left_artists + right_artists
 
-    interval_ms = (t_end - t_start) * 1000 / n_frames
+    # interval_ms = (t_end - t_start) * 1000 / n_frames
+    interval_ms = (t_end - t_start) * 100 / n_frames
     anim = FuncAnimation(fig, update, init_func=init, frames=n_frames,
                          interval=interval_ms, blit=False, repeat=True)
 
@@ -1334,9 +1335,10 @@ def export_poster_gmm_figure(
             proj_frame, sorted_heights, color="black", lw=2.0, alpha=0.85
         )
 
-    plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight")
-    print(f"Poster figure saved successfully to {output_path}")
+    # plt.tight_layout()
+    fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+    plt.savefig(sim_dir / output_path, bbox_inches="tight")
+    print(f"Poster figure saved successfully to {sim_dir / output_path}")
 
 
 def export_poster_snapshot_sinogram_figure(
@@ -1449,11 +1451,5 @@ def export_poster_snapshot_sinogram_figure(
     ax_sino.set_ylabel("Detector Height (m)", fontweight="bold", fontsize=18)
     ax_sino.set_title("Dynamic Sinogram", fontweight="bold", fontsize=18, pad=8)
 
-    # Add vertical indicator lines pointing to the timestamps from Row 1
-    # for t_target in timestamps:
-    #     ax_sino.axvline(
-    #         x=t_target, color="white", linestyle="--", linewidth=1.5, alpha=0.85
-    #     )
-
-    plt.savefig(output_path, bbox_inches="tight")
-    print(f"Composite figure saved successfully to {output_path}")
+    plt.savefig(sim_dir / output_path, bbox_inches="tight")
+    print(f"Composite figure saved successfully to {sim_dir / output_path}")
