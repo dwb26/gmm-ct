@@ -71,29 +71,21 @@ def construct_receivers(device=None, *args):
 # Ground-truth parameter generation
 # ==========================================================================
 
-def generate_true_param(d, N, initial_location, initial_velocity,
-                        initial_acceleration, min_rot, max_rot,
-                        device=None, min_diag_ratio=1.5):
+def generate_true_param(
+    d: int, 
+    N: int, 
+    initial_location: torch.Tensor, 
+    initial_velocity: torch.Tensor,
+    initial_acceleration: torch.Tensor, 
+    min_rot: float, 
+    max_rot: float,
+    device: torch.device | None = None, 
+    min_diag_ratio: float = 1.5
+) -> dict[str, list[torch.tensor]]:
     """Generate a complete set of synthetic GMM parameters for testing.
 
     Parameters
     ----------
-    d : int
-        Spatial dimensionality.
-    N : int
-        Number of Gaussian components.
-    initial_location : torch.Tensor
-        Shared initial position (``d``-dimensional).
-    initial_velocity : torch.Tensor
-        Base initial velocity (``d``-dimensional); perturbations are added.
-    initial_acceleration : torch.Tensor
-        Shared acceleration (``d``-dimensional).
-    min_rot, max_rot : float
-        Angular velocity search bounds (Hz).
-    device : torch.device, optional
-        Computation device (default: CPU).
-    min_velocity_separation : float, optional
-        Minimum pairwise Euclidean distance between initial velocities.
     min_diag_ratio : float, optional
         Minimum diagonal aspect ratio for U_skew (enforces anisotropy).
 
@@ -209,23 +201,14 @@ def set_random_seeds(seed=42):
     return np.random.default_rng(seed)
 
 
-def export_parameters(theta_dict, filename, title="GMM Parameters",
-                      theta_true=None, theta_init=None):
-    """Export GMM parameters to a Markdown file.
-
-    Parameters
-    ----------
-    theta_dict : dict
-        Estimated parameter dictionary.
-    filename : str or Path
-        Output file path.
-    title : str, optional
-        Document title.
-    theta_true : dict, optional
-        Ground-truth parameters (for error computation).
-    theta_init : dict, optional
-        Initial-guess parameters (displayed alongside estimates).
-    """
+def export_parameters(
+    theta_dict: dict[str, list[torch.Tensor]], 
+    filename: str, 
+    title: str = "GMM Parameters",
+    theta_true: dict[str, list[torch.Tensor]] | None = None, 
+    theta_init: dict[str, list[torch.Tensor]] | None = None,
+) -> None:
+    """Export GMM parameters to a Markdown file."""
     with open(filename, 'w') as f:
         f.write(f"# {title}\n\n")
         f.write(f"*Exported on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n\n")
@@ -330,3 +313,44 @@ def export_parameters(theta_dict, filename, title="GMM Parameters",
                     f.write("\n")
 
     logger.info("Parameters exported to %s", filename)
+
+
+# ==========================================================================
+# L-BFGS root-finding solver (used by Newton-Raphson velocity refinement)
+# ==========================================================================
+
+def NewtonRaphsonLBFGS(
+    func, 
+    x0: torch.Tensor, 
+    *args, 
+    tol: float = 1e-5, 
+    max_iter: int = 100,
+    line_search_fn: str = 'strong_wolfe'
+) -> torch.Tensor:
+    """Find roots of func(x) = 0 by minimising ‖func(x)‖² with L-BFGS."""
+    if not x0.requires_grad:
+        x0.requires_grad_(True)
+
+    optimizer = torch.optim.LBFGS(
+        [x0], 
+        max_iter=max_iter, 
+        tolerance_grad=tol,
+        tolerance_change=tol, 
+        line_search_fn=line_search_fn,
+    )
+
+    def closure():
+        optimizer.zero_grad()
+        f_val = func(x0, *args)
+        loss = f_val ** 2 if f_val.dim() == 0 else torch.sum(f_val ** 2)
+        if loss.requires_grad:
+            loss.backward()
+        return loss
+
+    try:
+        optimizer.step(closure)
+    except Exception as e:
+        if "does not require grad" not in str(e):
+            logger.warning("L-BFGS root-finding failed: %s", e)
+
+    return x0
