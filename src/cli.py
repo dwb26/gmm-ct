@@ -1,17 +1,4 @@
-"""
-Command-line interface for GMM-CT.
-
-Provides two main commands:
-
-``gmm-ct simulate``
-    Generate synthetic projection data from a YAML config.
-
-``gmm-ct reconstruct``
-    Run reconstruction on observed (or simulated) projection data.
-
-Both commands take a ``--config`` flag pointing to a YAML file.
-See ``configs/`` for annotated examples.
-"""
+"""Command-line interface for GMM-CT."""
 
 import argparse
 import logging
@@ -50,17 +37,13 @@ def main(argv=None):
         prog="gmm-ct",
         description="GMM-CT: Gaussian Mixture Model CT Reconstruction",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "examples:\n"
-            "  gmm-ct simulate   --config configs/simulate.yaml\n"
-            "  gmm-ct reconstruct --config configs/reconstruct.yaml\n"
-        ),
     )
-    parser.add_argument(
-        "--version", action="version", version="%(prog)s 0.2.0"
-    )
+    parser.add_argument("--version", action="version", version="%(prog)s 0.2.0")
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    
+    
+    
 
     # --- simulate --------------------------------------------------------
     sim_parser = subparsers.add_parser(

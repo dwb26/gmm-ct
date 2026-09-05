@@ -145,7 +145,7 @@ class GMM_reco:
 
         # Stage 1: Trajectory Optimization
         stage_bar.set_description("GMM-CT  [1/4 trajectory]")
-        soln_dict, best_res = self._stage_trajectory_optimization(t, proj_data)
+        soln_dict = self._stage_trajectory_optimization(t, proj_data)
         self.theta_pre_stage1_5 = self._clone_dict(soln_dict)
         stage_bar.update(1)
 
@@ -184,7 +184,7 @@ class GMM_reco:
         if loss_type is not None:
             theta_dict = {**self.theta_fixed, **theta_dict}
 
-        rot_mats = self._compute_rotation_matrices(t, theta_dict)  # [N, T, d, d]
+        rot_mats = self._compute_2d_rotation_matrices(t, theta_dict)  # [N, T, d, d]
         trajs = self._compute_trajectories(t, theta_dict)          # [N, T, d]
 
         projs = [
@@ -194,16 +194,16 @@ class GMM_reco:
         EPS = 1e-10
 
         for n_s, source in enumerate(self.sources):
-            receivers = torch.stack(self.receivers[n_s]) # [R, d]
-            r_minus_s = receivers - source               # [R, d]
-            r_hat = r_minus_s / torch.norm(r_minus_s, dim=1, keepdim=True) # [R, d]
+            receivers = torch.stack(self.receivers[n_s])                    # [R, d]
+            r_minus_s = receivers - source                                  # [R, d]
+            r_hat = r_minus_s / torch.norm(r_minus_s, dim=1, keepdim=True)  # [R, d]
 
             for n in range(self.N):
                 alpha_n = theta_dict["alphas"][n].squeeze()
-                U_n = theta_dict["U_skews"][n]           # [d, d]
+                U_n = theta_dict["U_skews"][n]                              # [d, d]
                 
                 # Batch transform shape matrix: U_n_t = U_n @ R_n(t)^T
-                U_n_t = torch.matmul(U_n, rot_mats[n].transpose(-1, -2)) # [T, d, d]
+                U_n_t = torch.matmul(U_n, rot_mats[n].transpose(-1, -2))    # [T, d, d]
 
                 # Project ray directions & trajectory offset
                 # U_r_hat: [T, R, d], U_r: [T, R, d], U_traj: [T, 1, d]
@@ -215,7 +215,7 @@ class GMM_reco:
                 norm_r_hat = torch.norm(U_r_hat, dim=-1) # [T, R]
                 quotient = (self.sqrt_pi * alpha_n) / (norm_r_hat + EPS)
 
-                inner_prod_sq = torch.sum(U_r * U_traj, dim=-1)**2 # [T, R]
+                inner_prod_sq = torch.sum(U_r * U_traj, dim=-1)**2          # [T, R]
                 divisor = torch.sum(U_r**2, dim=-1) + EPS
                 subtractor = torch.sum(U_traj**2, dim=-1)
 
@@ -224,7 +224,7 @@ class GMM_reco:
 
         return projs
     
-    def _compute_rotation_matrices(
+    def _compute_2d_rotation_matrices(
         self, 
         t: torch.Tensor,
         theta: dict[str, list[torch.Tensor]],
@@ -253,8 +253,7 @@ class GMM_reco:
                 R_n = torch.bmm(R_n, R_plane)
             rot_stack.append(R_n)
             
-        return torch.stack(rot_stack)   # [N, T, d, d]
-        
+        return torch.stack(rot_stack)   # [N, T, d, d]      
     
     def _compute_trajectories(
         self,
@@ -276,8 +275,6 @@ class GMM_reco:
         """Flatten multi-source projection lists to a unified 2D tensor."""
         return projections[0] if self.n_sources == 1 else torch.cat(projections, dim=0)
 
-
-
     # ==================================================================
     # Stage 1 – trajectory optimization
     # ==================================================================
@@ -298,7 +295,8 @@ class GMM_reco:
         for n_trial in trial_bar:
             logger.info("Trial %d/%d", n_trial + 1, N_traj_trials)
             self.theta_dict_init = self.initialize_parameters(t, proj_data)
-            [v0_n.requires_grad_(True) for v0_n in self.theta_dict_init['v0s']]
+            for v0_n in self.theta_dict_init["v0s"]:
+                v0_n.requires_grad_(True)
 
             theta_tensor_init = self.map_from_dict_to_tensor(self.theta_dict_init, mode='trajectory')
             res_trial = minimize(
@@ -322,23 +320,9 @@ class GMM_reco:
             )
 
         soln_dict["v0s"] = [v0_n.clone().detach() for v0_n in soln_dict["v0s"]]
-
-        # Optional diagnostic plots
-        # if self.save_diagnostics:
-        #     from .visualization.diagnostics import (
-        #         plot_trajectory_estimations,
-        #         plot_heights_by_assignment,
-        #         plot_raw_receiver_heights,
-        #         plot_assignment_quality,
-        #         plot_gmm_and_projections,
-        #         plot_trajectory_fitting,
-        #     )
-        #     plot_trajectory_estimations(self, best_res)
-        #     plot_raw_receiver_heights(self)
-        #     plot_heights_by_assignment(self)
-        #     plot_assignment_quality(self, best_res)
-        #     plot_gmm_and_projections(self, best_res, theta_true=getattr(self, 'theta_true', None))
-        #     plot_trajectory_fitting(self, best_res)
+        
+        if self.save_diagnostics:
+            self._plot_stage1_diagnostics(best_res)
 
         soln_dict = self.refine_initial_velocities_via_newton_raphson(soln_dict, best_res)
 
@@ -346,12 +330,12 @@ class GMM_reco:
         soln_dict["alphas"] = [alpha.clone().detach() for alpha in self.theta_dict_init["alphas"]]
         soln_dict["U_skews"] = self.initialize_anisotropic_U_skews(soln_dict["v0s"])
 
-        return soln_dict
-    
+        return soln_dict    
     
     # ==================================================================
     # Initialization Routines
     # ==================================================================
+    
     def initialize_parameters(
         self, 
         t: torch.Tensor, 
@@ -526,6 +510,9 @@ class GMM_reco:
             for g in range(self.N)
         ]
         self.assigned_peak_values = self.peak_data.assigned_values
+        
+        if self.save_diagnosticsL
+        self._plot_assignment_diagnostics()
 
         soln_dict["v0s"] = [v0.clone().detach() for v0 in self._newton_raphson_refinement(soln_dict)]
         return soln_dict
@@ -579,7 +566,26 @@ class GMM_reco:
         self.maximising_inds = self.peak_data.receiver_indices
         self.peak_values = self.peak_data.peak_values
         self.observable_indices = self.peak_data.observable_indices
-
+        
+    def _plot_stage1_diagnostics(self, best_res: dict) -> None:
+        from .visualization.diagnostics import (
+            plot_assignment_quality,
+            plot_gmm_and_projections,
+            plot_heights_by_assignment,
+            plot_raw_receiver_heights,
+            plot_trajectory_estimations,
+            plot_trajectory_fitting,
+        )
+        plot_trajectory_estimations(model=self, res=best_res)
+        plot_raw_receiver_heights(self)
+        plot_heights_by_assignment(self)
+        plot_assignment_quality(model=self, res=best_res)
+        plot_gmm_and_projections(model=self, res=best_res, theta_true=getattr(self, "theta_true", None))
+        plot_trajectory_fitting(model=self, res=best_res)
+        
+    def _plot_assignment_diagnostics(self):
+        from visualization.diagnostics import plot_heights_by_assignment
+        plot_heights_by_assignment(self)
 
 
     # ==================================================================
