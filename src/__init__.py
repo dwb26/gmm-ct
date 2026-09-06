@@ -16,8 +16,9 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 # Import main classes and functions for convenient access
 from .config import (
     GRAVITATIONAL_ACCELERATION,
-    load_reconstruct_config,
-    load_simulate_config,
+    # load_reconstruct_config,
+    # load_simulate_config,
+    load_experiment_config,
     ReconstructConfig,
     SimulateConfig,
 )

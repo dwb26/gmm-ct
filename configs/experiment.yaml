@@ -1,0 +1,46 @@
+device: null
+
+model: 
+  sim_n_gaussians: 5
+  reco_n_gaussians: 5
+
+geometry:
+  sources:
+    - [-1.0, -1.0]
+  receivers:
+    n_receivers: 128
+    x_coordinate: 20.0
+    y_min: -3.0
+    y_max: 1.0
+
+physics:
+  initial_positions:
+    - [1.0, 1.0]
+  accelerations:
+    - [0.0, -9.81]
+  omega_range:
+    - [-24.0, 16.0]
+
+simulation:
+  seed: 9
+  n_projections: 150
+  duration: 1.5
+  initial_velocity: [0.75, 0.5]
+
+reconstruction:
+  N_trajectory_trials: 20
+  N_omega_inits: 5
+  max_iterations: 500
+  tolerance: 1e-5
+
+output:
+  directory: "data/results/exp_01"
+  save_plots: true
+  save_animations: true
+  verbose: true
+
+analysis:
+  enabled: true
+  skip_errors: false
+  skip_plots: false
+  skip_animations: false

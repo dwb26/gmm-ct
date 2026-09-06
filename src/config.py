@@ -210,7 +210,7 @@ def load_experiment_config(path: Union[str, Path]) -> ExperimentConfig:
         geometry=GeometryConfig(
             sources=raw["geometry"]["sources"],
             receivers=raw["geometry"]["receivers"],
-        )
+        ),
         physics=PhysicsConfig(
             initial_positions=raw["physics="["initial_positions"]],
             accelerations=raw["physics"]["accelerations"],
@@ -224,7 +224,7 @@ def load_experiment_config(path: Union[str, Path]) -> ExperimentConfig:
         analysis=AnalysisConfig(**raw.get("analysis", {})),
         output=OutputConfig(**raw.get("output", {})),
         device=raw.get("device"),
-    )
+        )
 
 
 

@@ -15,7 +15,7 @@ from time import time as wall_clock
 import numpy as np
 import torch
 
-from .config import AnalysisConfig, ReconstructConfig
+from .config import ReconstructConfig
 from .model import GMM_reco
 from .utils import export_parameters
 

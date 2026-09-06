@@ -511,8 +511,8 @@ class GMM_reco:
         ]
         self.assigned_peak_values = self.peak_data.assigned_values
         
-        if self.save_diagnosticsL
-        self._plot_assignment_diagnostics()
+        if self.save_diagnostics:
+            self._plot_assignment_diagnostics()
 
         soln_dict["v0s"] = [v0.clone().detach() for v0 in self._newton_raphson_refinement(soln_dict)]
         return soln_dict

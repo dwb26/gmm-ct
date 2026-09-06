@@ -30,7 +30,6 @@ def _add_common_args(parser: argparse.ArgumentParser):
         help="Override output directory from config",
     )
 
-
 def main(argv=None):
     """Entry point for the ``gmm-ct`` CLI."""
     parser = argparse.ArgumentParser(
@@ -42,121 +41,110 @@ def main(argv=None):
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
+    # --- run (Simulate -> Reconstruct -> Analyze)
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Run full end-to-end experiment (Simulate -> Reconstruct -> Analyze)",
+    )
+    _add_common_args(run_parser)
     
-    
-
     # --- simulate --------------------------------------------------------
     sim_parser = subparsers.add_parser(
         "simulate",
-        help="Generate synthetic projection data",
-        description="Generate synthetic projection data from a YAML config.",
+        help="Generate synthetic projection data only",
     )
     _add_common_args(sim_parser)
-    sim_parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Override random seed from config",
+    sim_parser.add_argument("--seed", type=int, default=None, help="Override seed",
     )
-
     # --- reconstruct -----------------------------------------------------
     reco_parser = subparsers.add_parser(
         "reconstruct",
         help="Run reconstruction on projection data",
-        description="Run the 4-stage GMM reconstruction pipeline.",
     )
     _add_common_args(reco_parser)
-    reco_parser.add_argument(
-        "--data",
-        type=str,
-        default=None,
-        help="Override projection data path from config",
-    )
-    reco_parser.add_argument(
-        "--skip-analysis",
-        action="store_true",
-        help="Skip post-reconstruction analysis (error metrics + plots)",
-    )
-    reco_parser.add_argument(
-        "--skip-animations",
-        action="store_true",
-        help="Skip animation generation (plots and errors still run)",
-    )
+    reco_parser.add_argument("--data", type=str, default=None, help="Override projection data path")
+    reco_parser.add_argument("--skip-analysis", action="store_true", help="Skip post-reconstruction analysis")
 
-    # --- parse -----------------------------------------------------------
     args = parser.parse_args(argv)
 
     if args.command is None:
         parser.print_help()
         return 0
 
-    # Lazy imports to keep CLI start-up fast
+    if args.command == "run":
+        return _run_experiment_cmd(args)
     if args.command == "simulate":
-        return _run_simulate(args)
+        return _run_simulate_cmd(args)
     elif args.command == "reconstruct":
-        return _run_reconstruct(args)
+        return _run_reconstruct_cmd(args)
     else:
         parser.print_help()
         return 1
 
-
-# -----------------------------------------------------------------------
-# Command handlers
-# -----------------------------------------------------------------------
-
-def _run_simulate(args) -> int:
-    from .config import load_simulate_config
-    from .simulation import run_simulation
-
-    if args.config is None:
-        cfg_path = Path("configs/simulate.yaml")
-        cfg = load_simulate_config(cfg_path)
-        logger.info("No config specified, using default: %s", cfg_path)
-    else:
-        cfg = load_simulate_config(args.config)
-
-    # Apply CLI overrides
-    if args.device:
-        cfg.device = args.device
-    if args.output_dir:
-        cfg.output.directory = Path(args.output_dir)
-    if args.seed is not None:
-        cfg.simulation.seed = args.seed
-
-    logger.info("GMM-CT Simulate | N=%d, seed=%d, output=%s",
-                cfg.n_gaussians, cfg.simulation.seed, cfg.output.directory)
-
-    out_dir = run_simulation(cfg)
-    print(f"Simulation complete. Data saved to:\n  {out_dir}")
-    print(f"\nTo reconstruct, run:\n  gmm-ct reconstruct --config configs/reconstruct.yaml --data {out_dir}/projections.pt")
+def _run_experiment_cmd(args) -> int:
+    from .config import load_experiment_config
+    from .experiment import run_experiment
+    
+    cfg = load_experiment_config(args.config)
+    _apply_cli_overrides(cfg, args)
+    
+    run_experiment(cfg)
     return 0
 
+def _run_simulate_cmd(args) -> int:
+    from .config import load_simulate_config
+    from .simulation import run_simulation
+    
+    cfg = load_simulate_config(arg.config)
+    _apply_cli_overrides(cfg, args)
+    if getattr(args, "seed", None) is not None:
+        cfg.simulation.seed = args.seed
 
-def _run_reconstruct(args) -> int:
+    out_dir = run_simulation(cfg)
+    logger.info(f"Simulation complete. Data saved to:\n  {out_dir}")
+    # print(f"\nTo reconstruct, run:\n  gmm-ct reconstruct --config configs/reconstruct.yaml --data {out_dir}/projections.pt")
+    return 0
+
+def _run_reconstruct_cmd(args) -> int:
     from .config import load_reconstruct_config
     from .reconstruct import run_reconstruction
     
     cfg = load_reconstruct_config(args.config)
+    _apply_cli_overrides(cfg, args)
+    
+    if getattr(args, "data", None):
+        cfg.data_path = args.data
+    if getattr(args, "skip_analysis", False):
+        cfg.analysis_enabled = False
+        
+    run_reconstruction(cfg.reconstruct)
+    return 0
 
-    # Apply CLI overrides
+def _apply_cli_overrides(cfg, args) -> None:
     if args.device:
         cfg.device = args.device
     if args.output_dir:
-        cfg.output.directory = Path(args.output_dir)
-    if args.data:
-        cfg.data_path = args.data
-        logger.info("Overriding data path: %s", cfg.data_path)
-    if args.skip_analysis:
-        cfg.analysis.enabled = False
-    if args.skip_animations:
-        cfg.analysis.skip_animations = True
-
-    logger.info("GMM-CT Reconstruct | data=%s, N=%d, output=%s",
-                cfg.data_path, cfg.n_gaussians, cfg.output.directory)
-
-    run_reconstruction(cfg)
-    return 0
-
+        cfg.output_directory = Path(args.output_dir)
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+    # Apply CLI overrides
+    # if args.device:
+    #     cfg.device = args.device
+    # if args.output_dir:
+    #     cfg.output.directory = Path(args.output_dir)
+    # if args.data:
+    #     cfg.data_path = args.data
+    #     logger.info("Overriding data path: %s", cfg.data_path)
+    # if args.skip_analysis:
+    #     cfg.analysis.enabled = False
+    # if args.skip_animations:
+    #     cfg.analysis.skip_animations = True
+
+    # logger.info("GMM-CT Reconstruct | data=%s, N=%d, output=%s",
+    #             cfg.data_path, cfg.n_gaussians, cfg.output.directory)
+
+    # run_reconstruction(cfg)
+    # return 0
