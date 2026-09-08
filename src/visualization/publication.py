@@ -5,6 +5,8 @@ Creates high-resolution, publication-ready figures with consistent styling.
 
 import logging
 
+from pathlib import Path
+
 import matplotlib as mpl
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
@@ -550,6 +552,7 @@ def plot_temporal_gmm_comparison(
     t,
     K,
     d,
+    output_dir: Path,
     timestamps: list[float] | int | None = [0.83, 0.98],
     filename=None,
     show_trajectories=True,
@@ -641,6 +644,7 @@ def plot_temporal_gmm_comparison(
         theta_true["a0s"],
         omega_min=0.0,
         omega_max=10.0,
+        output_dir=output_dir,
         device=theta_true["x0s"][0].device,
     )
     GMM_est_obj = GMM_reco(
@@ -652,6 +656,7 @@ def plot_temporal_gmm_comparison(
         theta_est_reordered["a0s"],
         omega_min=0.0,
         omega_max=10.0,
+        output_dir=output_dir,
         device=theta_est_reordered["x0s"][0].device,
     )
 
@@ -1127,7 +1132,7 @@ def animate_gmm_with_joint_projection(
 
 
 def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est, 
-                                     t, K, d, filename=None, fps=10,
+                                     t, K, d, output_dir, filename=None, fps=10,
                                      show_trajectories=True,
                                      title='', 
                                      title_fontsize=20, label_fontsize=18, tick_fontsize=16,
@@ -1172,9 +1177,11 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     # Generate projections
     GMM_true_obj = GMM_reco(d, K, sources, receivers, 
                             theta_true['x0s'], theta_true['a0s'], omega_min=0.0, omega_max=10.0,
+                            output_dir=output_dir,
                             device=theta_true['x0s'][0].device)
     GMM_est_obj = GMM_reco(d, K, sources, receivers,
                            theta_est_reordered['x0s'], theta_est_reordered['a0s'], omega_min=0.0, omega_max=10.0,
+                           output_dir=output_dir,
                            device=theta_est_reordered['x0s'][0].device)
     
     proj_true = GMM_true_obj.generate_projections(t, theta_true)

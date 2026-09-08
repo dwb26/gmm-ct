@@ -112,31 +112,31 @@ def plot_heights_by_assignment(model, true_data=False):
     plt.close()
 
 
-def plot_raw_receiver_heights(model):
-    """
-    Plot raw, unassigned receiver heights where peaks were detected.
+# def plot_raw_receiver_heights(model):
+#     """
+#     Plot raw, unassigned receiver heights where peaks were detected.
 
-    Parameters
-    ----------
-    model : GMM_reco
-        The reconstruction model instance.
-    """
-    fig, ax = plt.subplots(figsize=(10, 6))
+#     Parameters
+#     ----------
+#     model : GMM_reco
+#         The reconstruction model instance.
+#     """
+#     fig, ax = plt.subplots(figsize=(10, 6))
 
-    for time_val, heights in model.time_rcvr_heights_dict_non_empty.items():
-        if heights:
-            times = [time_val] * len(heights)
-            height_vals = [h.item() for h in heights]
-            ax.scatter(times, height_vals, s=10, color='black')
+#     for time_val, heights in model.time_rcvr_heights_dict_non_empty.items():
+#         if heights:
+#             times = [time_val] * len(heights)
+#             height_vals = [h.item() for h in heights]
+#             ax.scatter(times, height_vals, s=10, color='black')
 
-    ax.set_xlabel('Time', fontsize=_LABEL_FONTSIZE)
-    ax.set_ylabel('Height', fontsize=_LABEL_FONTSIZE)
-    ax.tick_params(axis='both', which='major', labelsize=_TICK_FONTSIZE)
-    ax.grid(True, alpha=0.3, linestyle='--')
+#     ax.set_xlabel('Time', fontsize=_LABEL_FONTSIZE)
+#     ax.set_ylabel('Height', fontsize=_LABEL_FONTSIZE)
+#     ax.tick_params(axis='both', which='major', labelsize=_TICK_FONTSIZE)
+#     ax.grid(True, alpha=0.3, linestyle='--')
 
-    filename = model.output_dir / f'raw_receiver_heights_K{model.N}.png'
-    plt.savefig(filename, dpi=150, bbox_inches='tight')
-    plt.close()
+#     filename = model.output_dir / f'raw_receiver_heights_K{model.N}.png'
+#     plt.savefig(filename, dpi=150, bbox_inches='tight')
+#     plt.close()
 
 
 # ======================================================================

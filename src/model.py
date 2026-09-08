@@ -38,8 +38,8 @@ class GMM_reco:
     omega_min, omega_max : Angular velocity search bounds (Hz).
     device : Computation device (auto-detected when None).
     output_dir : Directory for diagnostic plots (default: ``'data/results/'``).
-    N_traj_trials : Multi-start trials for Stage 1 (default: max(20, 2·N)).
-    N_omega_inits : Multi-start trials for Stage 2 (default: 5).
+    n_traj_trials : Multi-start trials for Stage 1 (default: max(20, 2·N)).
+    n_omega_inits : Multi-start trials for Stage 2 (default: 5).
     save_diagnostics : Save diagnostic plots at the end of Stage 1 (default: True).
     """
     def __init__(
@@ -52,10 +52,10 @@ class GMM_reco:
         a0s: list[torch.Tensor],
         omega_min: float, 
         omega_max: float, 
-        device: torch.device | None = None, 
-        output_dir: str | None = None,
-        N_traj_trials: int | None = None, 
-        N_omega_inits: int | None = None,
+        output_dir: str,
+        device: str = "cpu", 
+        n_traj_trials: int | None = None, 
+        n_omega_inits: int | None = None,
         save_diagnostics: bool = True,
     ):
         self.d = d
@@ -64,8 +64,8 @@ class GMM_reco:
         self.a0s = a0s
         self.omega_min = omega_min
         self.omega_max = omega_max
-        self.N_traj_trials = N_traj_trials
-        self.N_omega_inits = N_omega_inits
+        self.n_traj_trials = n_traj_trials
+        self.n_omega_inits = n_omega_inits
         self.save_diagnostics = save_diagnostics
         self.t_observable = []
 
@@ -106,12 +106,12 @@ class GMM_reco:
             cfg.device if cfg.device else ('cuda' if torch.cuda.is_available() else 'cpu')
         )
         sources, receivers = cfg.geometry.to_tensors(device)
-        x0s, a0s = cfg.physics.to_tensors(cfg.n_gaussians, device)
+        x0s, a0s = cfg.physics.to_tensors(cfg.reco_n_gaussians, device)
         omega_min, omega_max = cfg.physics.omega_range
 
         return cls(
             d=cfg.geometry.dimensionality,
-            N=cfg.n_gaussians,
+            N=cfg.reco_n_gaussians,
             sources=sources,
             receivers=receivers,
             x0s=x0s,
@@ -120,8 +120,8 @@ class GMM_reco:
             omega_max=omega_max,
             device=device,
             output_dir=cfg.output.directory,
-            N_traj_trials=cfg.reconstruction.N_trajectory_trials,
-            N_omega_inits=cfg.reconstruction.N_omega_inits,
+            n_traj_trials=cfg.reconstruction.n_trajectory_trials,
+            n_omega_inits=cfg.reconstruction.n_omega_inits,
             save_diagnostics=cfg.output.save_plots,
         )
 
@@ -184,8 +184,8 @@ class GMM_reco:
         if loss_type is not None:
             theta_dict = {**self.theta_fixed, **theta_dict}
 
-        rot_mats = self._compute_2d_rotation_matrices(t, theta_dict)  # [N, T, d, d]
-        trajs = self._compute_trajectories(t, theta_dict)          # [N, T, d]
+        rot_mats = self._compute_2d_rotation_matrices(t, theta_dict)    # [N, T, d, d]
+        trajs = self._compute_trajectories(t, theta_dict)               # [N, T, d]
 
         projs = [
             torch.zeros(len(t), self.n_rcvrs, dtype=torch.float64, device=self.device)
@@ -287,13 +287,13 @@ class GMM_reco:
         """Multi-start L-BFGS to estimate initial velocities v0."""
         logger.info("Stage 1: Trajectory optimization")
 
-        N_traj_trials = self.N_traj_trials or max(20, 2 * self.N)
-        logger.info("Running %d trajectory multi-start trials", N_traj_trials)
+        n_traj_trials = self.n_traj_trials or max(20, 2 * self.N)
+        logger.info("Running %d trajectory multi-start trials", n_traj_trials)
 
         errors, results = [], []
-        trial_bar = tqdm(range(N_traj_trials), desc='  trials', unit='trial', leave=False)
+        trial_bar = tqdm(range(n_traj_trials), desc='  trials', unit='trial', leave=False)
         for n_trial in trial_bar:
-            logger.info("Trial %d/%d", n_trial + 1, N_traj_trials)
+            logger.info("Trial %d/%d", n_trial + 1, n_traj_trials)
             self.theta_dict_init = self.initialize_parameters(t, proj_data)
             for v0_n in self.theta_dict_init["v0s"]:
                 v0_n.requires_grad_(True)
@@ -330,7 +330,7 @@ class GMM_reco:
         soln_dict["alphas"] = [alpha.clone().detach() for alpha in self.theta_dict_init["alphas"]]
         soln_dict["U_skews"] = self.initialize_anisotropic_U_skews(soln_dict["v0s"])
 
-        return soln_dict    
+        return soln_dict
     
     # ==================================================================
     # Initialization Routines
@@ -449,7 +449,7 @@ class GMM_reco:
             )
             lambda_t = (r0_x - s[0]) / denom_safe               # [T_obs]
             r_maxs_n = s + lambda_t.unsqueeze(-1) * (s - c_n)   # [T_obs, d]
-            r_maxs_list.append(torch.stack(r_maxs_n))
+            r_maxs_list.append(r_maxs_n)
 
         return r_maxs_list
     
@@ -470,7 +470,7 @@ class GMM_reco:
             dist_matrix = torch.abs(obs_tensor - pred_tensor)
             dist_matrix = torch.where(torch.isnan(dist_matrix) | torch.isinf(dist_matrix), 1e10, dist_matrix)
 
-            row_indices, col_indices = linear_sum_assignment(dist_matrix.cpu().numpy())
+            row_indices, col_indices = linear_sum_assignment(dist_matrix.cpu().detach().numpy())
             for h_idx, g_idx in zip(row_indices, col_indices):
                 self.assigned_curve_data[g_idx].append((time_idx, observed_heights[h_idx]))
     
@@ -554,39 +554,6 @@ class GMM_reco:
             v0s_refined.append(v0_n_refined.requires_grad_(True))
 
         return v0s_refined
-    
-    # ==================================================================
-    # Internal Helpers & Placeholders
-    # ==================================================================
-    
-    def _create_legacy_aliases(self):
-        """Set model attributes expected by diagnostic plotting functions."""
-        self.t_obs_by_cluster = self.peak_data.times
-        self.maximising_rcvrs = self.peak_data.receiver_positions
-        self.maximising_inds = self.peak_data.receiver_indices
-        self.peak_values = self.peak_data.peak_values
-        self.observable_indices = self.peak_data.observable_indices
-        
-    def _plot_stage1_diagnostics(self, best_res: dict) -> None:
-        from .visualization.diagnostics import (
-            plot_assignment_quality,
-            plot_gmm_and_projections,
-            plot_heights_by_assignment,
-            plot_raw_receiver_heights,
-            plot_trajectory_estimations,
-            plot_trajectory_fitting,
-        )
-        plot_trajectory_estimations(model=self, res=best_res)
-        plot_raw_receiver_heights(self)
-        plot_heights_by_assignment(self)
-        plot_assignment_quality(model=self, res=best_res)
-        plot_gmm_and_projections(model=self, res=best_res, theta_true=getattr(self, "theta_true", None))
-        plot_trajectory_fitting(model=self, res=best_res)
-        
-    def _plot_assignment_diagnostics(self):
-        from visualization.diagnostics import plot_heights_by_assignment
-        plot_heights_by_assignment(self)
-
 
     # ==================================================================
     # Stage 1.5 – omega grid search
@@ -754,7 +721,7 @@ class GMM_reco:
         subsequent trials draw random omega candidates.
         """
         logger.info("Stage 2: Multi-start joint optimization")
-        n_trials = self.N_omega_inits or 5
+        n_trials = self.n_omega_inits or 5
         logger.info("Running %d trials", n_trials)
 
         initial_alphas = [a.clone().detach() for a in soln_dict['alphas']]
@@ -1084,93 +1051,38 @@ class GMM_reco:
                 soln_dict[key] = value.copy()
         return soln_dict
 
-    # ==================================================================
-    # Optional utility methods (not part of the main pipeline)
-    # ==================================================================
-
-    def _eval_joint_loss(self, soln_dict):
-        """Evaluate the joint projection loss at the current parameters."""
-        self.theta_fixed = {
-            'x0s': [x0.clone() for x0 in soln_dict['x0s']],
-            'v0s': [v0.clone() for v0 in soln_dict['v0s']],
-            'a0s': [a0.clone() for a0 in soln_dict['a0s']],
-        }
-        test_dict = {
-            'alphas': [a.clone().requires_grad_(False) for a in soln_dict['alphas']],
-            'U_skews': [U.clone().requires_grad_(False) for U in soln_dict['U_skews']],
-            'omegas': [w.clone().requires_grad_(False) for w in soln_dict['omegas']],
-            'x0s': soln_dict['x0s'], 'v0s': soln_dict['v0s'], 'a0s': soln_dict['a0s'],
-        }
-        theta_tensor = self.map_from_dict_to_tensor(test_dict, mode='joint')
-        with torch.no_grad():
-            return self._loss_joint(theta_tensor).item()
-
-    def _optimize_joint(self, soln_dict, max_iter=300):
-        """Additional joint optimization of ω, U_skew, α (not part of main pipeline)."""
-        logger.info("Optimizing omega, U_skew, alpha jointly...")
-        for key in ('alphas', 'U_skews', 'omegas'):
-            soln_dict[key] = [p.requires_grad_(True) for p in soln_dict[key]]
-
-        self.theta_fixed = {
-            'x0s': [x0.clone() for x0 in soln_dict['x0s']],
-            'a0s': [a0.clone() for a0 in soln_dict['a0s']],
-        }
-        if not soln_dict['v0s'][0].requires_grad:
-            self.theta_fixed['v0s'] = [v0.clone() for v0 in soln_dict['v0s']]
-
-        theta_tensor = self.map_from_dict_to_tensor(soln_dict, mode='joint')
-        res = minimize(
-            self._loss_joint, x0=theta_tensor, method='l-bfgs',
-            tol=1e-8, options={'gtol': 1e-8, 'max_iter': max_iter, 'disp': False},
-        )
-        result_dict = self.construct_soln_dict(res)
-        for key in ('alphas', 'U_skews', 'omegas'):
-            soln_dict[key] = [p.clone().detach() for p in result_dict[key]]
-        logger.info("Joint optimization: loss = %.6e (%d iters)", res.fun.item(), res.nit)
-        return soln_dict
-
-    def _fine_grid_search_omega(self, soln_dict, current_sup_error, omega_range=3.0, omega_step=0.1):
-        """Fine ±omega_range Hz grid search around the current omega estimate."""
-        logger.info("Grid search: ±%.1f Hz with %.2f Hz steps", omega_range, omega_step)
-        self.theta_fixed = {
-            'x0s': soln_dict['x0s'], 'v0s': soln_dict['v0s'], 'a0s': soln_dict['a0s'],
-        }
-        best_sup_err = current_sup_error
-        best_omegas = [omega.clone() for omega in soln_dict['omegas']]
-
-        for k in range(self.N):
-            omega_current = soln_dict['omegas'][k].item()
-            omega_lo = omega_current - omega_range
-            omega_hi = omega_current + omega_range
-            n_points = int((omega_hi - omega_lo) / omega_step) + 1
-            omega_candidates = np.linspace(omega_lo, omega_hi, n_points)
-
-            sup_errors = []
-            for omega_test in omega_candidates:
-                test_dict = {
-                    key: [p.clone().requires_grad_(False) for p in soln_dict[key]]
-                    for key in ('alphas', 'U_skews', 'omegas')
-                }
-                test_dict.update({
-                    'x0s': soln_dict['x0s'], 'v0s': soln_dict['v0s'], 'a0s': soln_dict['a0s'],
-                })
-                test_dict['omegas'][k] = torch.tensor([omega_test], dtype=torch.float64, device=self.device)
-                sup_errors.append(self._sup_projection_error(test_dict))
-
-            min_idx = np.argmin(sup_errors)
-            if sup_errors[min_idx] < best_sup_err:
-                best_omegas[k] = torch.tensor([omega_candidates[min_idx]], dtype=torch.float64, device=self.device)
-                best_sup_err = sup_errors[min_idx]
-                logger.info("  Gaussian %d: ω %.4f → %.4f Hz (Δsup = %.6e)",
-                            k, omega_current, omega_candidates[min_idx],
-                            current_sup_error - sup_errors[min_idx])
-
-        soln_dict['omegas'] = [omega.clone().detach() for omega in best_omegas]
-        return soln_dict
 
     # ==================================================================
     # Internal utilities
     # ==================================================================
+    
+    def _create_legacy_aliases(self):
+        """Set model attributes expected by diagnostic plotting functions."""
+        self.t_obs_by_cluster = self.peak_data.times
+        self.maximising_rcvrs = self.peak_data.receiver_positions
+        self.maximising_inds = self.peak_data.receiver_indices
+        self.peak_values = self.peak_data.peak_values
+        self.observable_indices = self.peak_data.observable_indices
+        
+    def _plot_stage1_diagnostics(self, best_res: dict) -> None:
+        from .visualization.diagnostics import (
+            # plot_assignment_quality,
+            plot_gmm_and_projections,
+            plot_heights_by_assignment,
+            # plot_raw_receiver_heights,
+            plot_trajectory_estimations,
+            # plot_trajectory_fitting,
+        )
+        plot_trajectory_estimations(model=self, res=best_res)
+        # plot_raw_receiver_heights(self)
+        plot_heights_by_assignment(self)
+        # plot_assignment_quality(model=self, res=best_res)
+        plot_gmm_and_projections(model=self, res=best_res, theta_true=getattr(self, "theta_true", None))
+        # plot_trajectory_fitting(model=self, res=best_res)
+        
+    def _plot_assignment_diagnostics(self):
+        from .visualization.diagnostics import plot_heights_by_assignment
+        plot_heights_by_assignment(self)
 
     def _clone_dict(self, d):
         """Deep-clone a parameter dict (lists of tensors)."""
@@ -1191,329 +1103,3 @@ class GMM_reco:
         if isinstance(obj, dict):
             return {k: self._to_device(v) for k, v in obj.items()}
         return obj
-
-
-
-
-
-
-
-
-
-        # print(f"t_observable is = {self.t_observable}")
-        # print(f"The maximising receievers are: {self.maximising_rcvrs}")
-        # print(f"t_obs_by_cluster = {self.t_obs_by_cluster}")
-    #     if len(self.t_observable) == 0:
-    #         self.t_observable = torch.tensor([0.6040, 0.6141, 0.6242, 0.6342, 0.6443, 0.6544, 0.6644, 0.6745, 0.6846,
-    #                                           0.6946, 0.7047, 0.7148, 0.7248, 0.7349, 0.7450, 0.7550, 0.7651, 0.7752,
-    #                                           0.7852, 0.7953, 0.8054, 0.8154, 0.8255, 0.8356, 0.8456, 0.8557, 0.8658,
-    #                                           0.8758, 0.8859, 0.8960, 0.9060, 0.9161, 0.9262, 0.9362, 0.9463, 0.9564,
-    #                                           0.9664, 0.9765, 0.9866, 0.9966, 1.0067, 1.0168, 1.0268, 1.0369, 1.0470,
-    #                                           1.0570, 1.0671, 1.0772, 1.0872, 1.0973, 1.1074, 1.1174, 1.1275, 1.1376,
-    #                                           1.1477, 1.1577, 1.1678, 1.1779, 1.1879, 1.1980, 1.2081, 1.2181, 1.2282],
-    #                                          dtype=torch.float64)
-    #         # self.maximising_rcvrs = [[torch.tensor([4.0000, 0.9370], dtype=torch.float64), torch.tensor([4.0000, 0.8110], dtype=torch.float64), 
-    #         #                           torch.tensor([4.0000, 0.7165], dtype=torch.float64), torch.tensor([4.0000, 0.6220], dtype=torch.float64), 
-    #         #                           torch.tensor([4.0000, 0.4961], dtype=torch.float64), torch.tensor([4.0000, 0.3701], dtype=torch.float64), 
-    #         #                           torch.tensor([4.0000, 0.2756], dtype=torch.float64), torch.tensor([4.0000, 0.1496], dtype=torch.float64), 
-    #         #                           torch.tensor([4.0000, 0.0236], dtype=torch.float64), torch.tensor([ 4.0000, -0.0709], dtype=torch.float64), 
-    #         #                           torch.tensor([ 4.0000, -0.1969], dtype=torch.float64), torch.tensor([ 4.0000, -0.2913], dtype=torch.float64), 
-    #         #                           torch.tensor([ 4.0000, -0.4173], dtype=torch.float64), torch.tensor([ 4.0000, -0.5433], dtype=torch.float64), 
-    #         #                           torch.tensor([ 4.0000, -0.6693], dtype=torch.float64), torch.tensor([ 4.0000, -0.7953], dtype=torch.float64), 
-    #         #                           torch.tensor([ 4.0000, -0.9213], dtype=torch.float64), torch.tensor([ 4.0000, -1.0157], dtype=torch.float64), 
-    #         #                           torch.tensor([ 4.0000, -1.1417], dtype=torch.float64), torch.tensor([ 4.0000, -1.2677], dtype=torch.float64), 
-    #         #                           torch.tensor([ 4.0000, -1.3937], dtype=torch.float64), torch.tensor([ 4.0000, -1.5197], dtype=torch.float64), 
-    #         #                           torch.tensor([ 4.0000, -1.6457], dtype=torch.float64), torch.tensor([ 4.0000, -1.7717], dtype=torch.float64), 
-    #         #                           torch.tensor([ 4.0000, -1.8976], dtype=torch.float64), torch.tensor([ 4.0000, -2.0236], dtype=torch.float64), 
-    #         #                           torch.tensor([ 4.0000, -2.1496], dtype=torch.float64), torch.tensor([ 4.0000, -2.2756], dtype=torch.float64), 
-    #         #                           torch.tensor([ 4.0000, -2.4016], dtype=torch.float64), torch.tensor([ 4.0000, -2.5276], dtype=torch.float64), 
-    #         #                           torch.tensor([ 4.0000, -2.6535], dtype=torch.float64), torch.tensor([ 4.0000, -2.8110], dtype=torch.float64), 
-    #         #                           torch.tensor([ 4.0000, -2.9370], dtype=torch.float64)]]
-    #         self.maximising_rcvrs = [[torch.tensor([4.0000, 0.9055], dtype=torch.float64), torch.tensor([4.0000, 0.8110], dtype=torch.float64), torch.tensor([4.0000, 0.7165], dtype=torch.float64), 
-    #                                   torch.tensor([4.0000, 0.6220], dtype=torch.float64), torch.tensor([4.0000, 0.4961], dtype=torch.float64), torch.tensor([4.0000, 0.3701], dtype=torch.float64), 
-    #                                   torch.tensor([4.0000, 0.2756], dtype=torch.float64), torch.tensor([4.0000, 0.1496], dtype=torch.float64), torch.tensor([4.0000, 0.0551], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.0709], dtype=torch.float64), torch.tensor([ 4.0000, -0.1969], dtype=torch.float64), torch.tensor([ 4.0000, -0.2913], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.4173], dtype=torch.float64), torch.tensor([ 4.0000, -0.5433], dtype=torch.float64), torch.tensor([ 4.0000, -0.6693], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.7953], dtype=torch.float64), torch.tensor([ 4.0000, -0.9213], dtype=torch.float64), torch.tensor([ 4.0000, -1.0472], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.1732], dtype=torch.float64), torch.tensor([ 4.0000, -1.2992], dtype=torch.float64), torch.tensor([ 4.0000, -1.4252], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.5512], dtype=torch.float64), torch.tensor([ 4.0000, -1.6772], dtype=torch.float64), torch.tensor([ 4.0000, -1.8031], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.9291], dtype=torch.float64), torch.tensor([ 4.0000, -2.0551], dtype=torch.float64), torch.tensor([ 4.0000, -2.2126], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.3386], dtype=torch.float64), torch.tensor([ 4.0000, -2.4646], dtype=torch.float64), torch.tensor([ 4.0000, -2.6220], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.7480], dtype=torch.float64), torch.tensor([ 4.0000, -2.9055], dtype=torch.float64), torch.tensor([ 4.0000, -1.8031], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.8976], dtype=torch.float64), torch.tensor([ 4.0000, -2.0236], dtype=torch.float64), torch.tensor([ 4.0000, -2.1181], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.2126], dtype=torch.float64), torch.tensor([ 4.0000, -2.3386], dtype=torch.float64), torch.tensor([ 4.0000, -2.4331], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.5276], dtype=torch.float64), torch.tensor([ 4.0000, -2.6535], dtype=torch.float64), torch.tensor([ 4.0000, -2.7480], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.8740], dtype=torch.float64), torch.tensor([ 4.0000, -2.9685], dtype=torch.float64), torch.tensor([ 4.0000, -2.3386], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.4646], dtype=torch.float64), torch.tensor([ 4.0000, -2.6220], dtype=torch.float64), torch.tensor([ 4.0000, -2.7480], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.8740], dtype=torch.float64), torch.tensor([ 4.0000, -1.9921], dtype=torch.float64), torch.tensor([ 4.0000, -2.0866], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.2126], dtype=torch.float64), torch.tensor([ 4.0000, -2.3701], dtype=torch.float64), torch.tensor([ 4.0000, -2.4961], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.6220], dtype=torch.float64), torch.tensor([ 4.0000, -2.7480], dtype=torch.float64), torch.tensor([ 4.0000, -2.8740], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.4646], dtype=torch.float64), torch.tensor([ 4.0000, -2.5591], dtype=torch.float64), torch.tensor([ 4.0000, -2.6535], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.7480], dtype=torch.float64), torch.tensor([ 4.0000, -2.8425], dtype=torch.float64), torch.tensor([ 4.0000, -2.9370], dtype=torch.float64)], 
-    #                                  [torch.tensor([4.0000, 0.9685], dtype=torch.float64), torch.tensor([4.0000, 0.8740], dtype=torch.float64), torch.tensor([4.0000, 0.8110], dtype=torch.float64), 
-    #                                   torch.tensor([4.0000, 0.7165], dtype=torch.float64), torch.tensor([4.0000, 0.6220], dtype=torch.float64), torch.tensor([4.0000, 0.5276], dtype=torch.float64), 
-    #                                   torch.tensor([4.0000, 0.4646], dtype=torch.float64), torch.tensor([4.0000, 0.3701], dtype=torch.float64), torch.tensor([4.0000, 0.2756], dtype=torch.float64), 
-    #                                   torch.tensor([4.0000, 0.1811], dtype=torch.float64), torch.tensor([4.0000, 0.0866], dtype=torch.float64), torch.tensor([ 4.0000, -0.0079], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.1024], dtype=torch.float64), torch.tensor([ 4.0000, -0.1969], dtype=torch.float64), torch.tensor([ 4.0000, -0.2913], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.3858], dtype=torch.float64), torch.tensor([ 4.0000, -0.4803], dtype=torch.float64), torch.tensor([ 4.0000, -0.5748], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.6693], dtype=torch.float64), torch.tensor([ 4.0000, -0.7638], dtype=torch.float64), torch.tensor([ 4.0000, -0.8898], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.9843], dtype=torch.float64), torch.tensor([ 4.0000, -1.0787], dtype=torch.float64), torch.tensor([ 4.0000, -1.1732], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.2677], dtype=torch.float64), torch.tensor([ 4.0000, -1.3937], dtype=torch.float64), torch.tensor([ 4.0000, -1.4882], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.5827], dtype=torch.float64), torch.tensor([ 4.0000, -1.6772], dtype=torch.float64), torch.tensor([ 4.0000, -0.7953], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.9213], dtype=torch.float64), torch.tensor([ 4.0000, -1.0472], dtype=torch.float64), torch.tensor([ 4.0000, -1.1732], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.2992], dtype=torch.float64), torch.tensor([ 4.0000, -1.4252], dtype=torch.float64), torch.tensor([ 4.0000, -1.5512], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.6772], dtype=torch.float64), torch.tensor([ 4.0000, -1.8031], dtype=torch.float64), torch.tensor([ 4.0000, -1.9291], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.0866], dtype=torch.float64), torch.tensor([ 4.0000, -2.2126], dtype=torch.float64), torch.tensor([ 4.0000, -1.2992], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.3937], dtype=torch.float64), torch.tensor([ 4.0000, -1.4882], dtype=torch.float64), torch.tensor([ 4.0000, -1.7402], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.8661], dtype=torch.float64), torch.tensor([ 4.0000, -1.7402], dtype=torch.float64), torch.tensor([ 4.0000, -1.8346], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.9291], dtype=torch.float64), torch.tensor([ 4.0000, -1.9921], dtype=torch.float64), torch.tensor([ 4.0000, -2.0866], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -2.1811], dtype=torch.float64), torch.tensor([ 4.0000, -2.2756], dtype=torch.float64), torch.tensor([ 4.0000, -2.3701], dtype=torch.float64)], 
-    #                                  [torch.tensor([4.0000, 0.9055], dtype=torch.float64), torch.tensor([4.0000, 0.8425], dtype=torch.float64), torch.tensor([4.0000, 0.7480], dtype=torch.float64), 
-    #                                   torch.tensor([4.0000, 0.6535], dtype=torch.float64), torch.tensor([4.0000, 0.4961], dtype=torch.float64), torch.tensor([4.0000, 0.3701], dtype=torch.float64), 
-    #                                   torch.tensor([4.0000, 0.2441], dtype=torch.float64), torch.tensor([4.0000, 0.1181], dtype=torch.float64), torch.tensor([4.0000, 0.0236], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.1024], dtype=torch.float64), torch.tensor([ 4.0000, -0.1969], dtype=torch.float64), torch.tensor([ 4.0000, -0.3228], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.4488], dtype=torch.float64), torch.tensor([ 4.0000, -0.5748], dtype=torch.float64), torch.tensor([ 4.0000, -0.6693], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.2283], dtype=torch.float64), torch.tensor([ 4.0000, -0.2913], dtype=torch.float64), torch.tensor([ 4.0000, -0.3228], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.3858], dtype=torch.float64), torch.tensor([ 4.0000, -0.4803], dtype=torch.float64), torch.tensor([ 4.0000, -0.6063], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.7323], dtype=torch.float64), torch.tensor([ 4.0000, -0.8583], dtype=torch.float64), torch.tensor([ 4.0000, -0.9528], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.0157], dtype=torch.float64), torch.tensor([ 4.0000, -1.1102], dtype=torch.float64), torch.tensor([ 4.0000, -1.2047], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -1.5512], dtype=torch.float64), torch.tensor([ 4.0000, -1.6457], dtype=torch.float64)], 
-    #                                  [torch.tensor([4.0000, 0.6220], dtype=torch.float64), torch.tensor([4.0000, 0.5591], dtype=torch.float64), torch.tensor([4.0000, 0.4646], dtype=torch.float64), 
-    #                                   torch.tensor([4.0000, 0.4016], dtype=torch.float64), torch.tensor([4.0000, 0.3071], dtype=torch.float64), torch.tensor([4.0000, 0.2441], dtype=torch.float64), 
-    #                                   torch.tensor([4.0000, 0.1496], dtype=torch.float64), torch.tensor([4.0000, 0.0866], dtype=torch.float64), torch.tensor([ 4.0000, -0.0079], dtype=torch.float64), 
-    #                                   torch.tensor([ 4.0000, -0.0709], dtype=torch.float64), torch.tensor([ 4.0000, -0.1654], dtype=torch.float64)], 
-    #                                  [torch.tensor([4.0000, 0.9055], dtype=torch.float64), torch.tensor([4.0000, 0.8110], dtype=torch.float64), torch.tensor([4.0000, 0.7165], dtype=torch.float64), 
-    #                                   torch.tensor([4.0000, 0.6220], dtype=torch.float64), torch.tensor([4.0000, 0.4961], dtype=torch.float64), torch.tensor([4.0000, 0.4016], dtype=torch.float64), 
-    #                                   torch.tensor([4.0000, 0.2756], dtype=torch.float64)]]
-            
-    #         self.t_obs_by_cluster = [torch.tensor([0.6040, 0.6141, 0.6242, 0.6342, 0.6443, 0.6544, 0.6644, 0.6745, 0.6846,
-    #                                                0.6946, 0.7047, 0.7148, 0.7248, 0.7349, 0.7450, 0.7550, 0.7651, 0.7752,
-    #                                                0.7852, 0.7953, 0.8054, 0.8154, 0.8255, 0.8356, 0.8456, 0.8557, 0.8658,
-    #                                                0.8758, 0.8859, 0.8960, 0.9060, 0.9161, 0.9262, 0.9362, 0.9463, 0.9564,
-    #                                                0.9664, 0.9765, 0.9866, 0.9966, 1.0067, 1.0168, 1.0268, 1.0369, 1.0470,
-    #                                                1.0570, 1.0671, 1.0772, 1.0872, 1.0973, 1.1074, 1.1174, 1.1275, 1.1376,
-    #                                                1.1477, 1.1577, 1.1678, 1.1779, 1.1879, 1.1980, 1.2081, 1.2181, 1.2282], dtype=torch.float64), 
-    #                                  torch.tensor([0.6342, 0.6443, 0.6544, 0.6644, 0.6745, 0.6846, 0.6946, 0.7047, 0.7148,
-    #                                                0.7248, 0.7349, 0.7450, 0.7550, 0.7651, 0.7752, 0.7852, 0.7953, 0.8054,
-    #                                                0.8154, 0.8255, 0.8356, 0.8456, 0.8557, 0.8658, 0.8758, 0.8859, 0.8960,
-    #                                                0.9060, 0.9161, 0.9262, 0.9362, 0.9463, 0.9564, 0.9664, 0.9765, 0.9866,
-    #                                                0.9966, 1.0067, 1.0168, 1.0268, 1.0369, 1.0470, 1.0570, 1.0671, 1.0772,
-    #                                                1.0872, 1.0973, 1.1074, 1.1174, 1.1275, 1.1376, 1.1477, 1.1577, 1.1678], dtype=torch.float64), 
-    #                                  torch.tensor([0.7752, 0.7852, 0.7953, 0.8054, 0.8154, 0.8255, 0.8356, 0.8456, 0.8557,
-    #                                                0.8658, 0.8758, 0.8859, 0.8960, 0.9060, 0.9161, 0.9262, 0.9362, 0.9463,
-    #                                                0.9564, 0.9664, 0.9765, 0.9866, 0.9966, 1.0067, 1.0168, 1.0268, 1.0369,
-    #                                                1.0772, 1.0872], dtype=torch.float64), 
-    #                                  torch.tensor([0.8154, 0.8255, 0.8356, 0.8456, 0.8557, 0.8658, 0.8758, 0.8859, 0.8960,
-    #                                                0.9060, 0.9161], dtype=torch.float64), 
-    #                                  torch.tensor([0.8356, 0.8456, 0.8557, 0.8658, 0.8758, 0.8859, 0.8960],
-    #    dtype=torch.float64)]
-    
-    
-    
-    
-    
-    
-    
-    
-# ==========================================================================
-# PeakData – container for peak detection and assignment results
-# ==========================================================================
-
-# class PeakData:
-#     """Store peak-detection and trajectory-assignment data.
-
-#     Attributes
-#     ----------
-#     observable_indices : list of int
-#         Indices into the full time array where peaks were found.
-#     receiver_heights_by_time : dict
-#         ``{time_val: [heights]}`` – detected peak heights at each time.
-#     times, receiver_positions, receiver_indices, peak_values : list of list
-#         Per-Gaussian sequential detection results (used by diagnostic plots).
-#     assigned_times, assigned_heights, assigned_values : list of list
-#         Per-Gaussian optimal assignments (set by Hungarian / nearest-neighbour).
-#     """
-
-#     def __init__(self, n_gaussians: int, device: torch.device):
-#         self.N = n_gaussians
-#         self.device = device
-
-#         # Raw detection (per time point)
-#         self.observable_indices: list = []
-#         self.receiver_heights_by_time: dict = {}
-
-#         # Sequential assignment (per Gaussian) – used by diagnostic plots
-#         self.times = [[] for _ in range(n_gaussians)]
-#         self.receiver_positions = [[] for _ in range(n_gaussians)]
-#         self.receiver_indices = [[] for _ in range(n_gaussians)]
-#         self.peak_values = [[] for _ in range(n_gaussians)]
-
-#         # Optimal assignment (per Gaussian) – used by Newton-Raphson refinement
-#         self.assigned_times = [[] for _ in range(n_gaussians)]
-#         self.assigned_heights = [[] for _ in range(n_gaussians)]
-#         self.assigned_values = [[] for _ in range(n_gaussians)]
-
-#     def add_peak_detection(self, time_idx, time_val, receiver_idx, receiver_pos,
-#                            peak_val, gaussian_idx):
-#         """Record one detected peak from the sequential bottom-to-top scan."""
-#         self.times[gaussian_idx].append(time_val)
-#         self.receiver_positions[gaussian_idx].append(receiver_pos)
-#         self.receiver_indices[gaussian_idx].append(receiver_idx)
-#         self.peak_values[gaussian_idx].append(peak_val)
-
-#         if gaussian_idx == 0 and time_idx not in self.observable_indices:
-#             self.observable_indices.append(time_idx)
-
-#     def add_time_detections(self, time_val, detected_heights):
-#         """Record all peak heights found at one time point."""
-#         if detected_heights:
-#             self.receiver_heights_by_time[time_val] = detected_heights
-
-#     def finalize_detections(self):
-#         """Convert accumulated per-Gaussian lists to tensors."""
-#         for k in range(self.N):
-#             vals = self.times[k]
-#             self.times[k] = (
-#                 torch.tensor(vals, dtype=torch.float64, device=self.device)
-#                 if vals
-#                 else torch.tensor([], dtype=torch.float64, device=self.device)
-#             )
-
-#     def add_optimal_assignment(self, gaussian_idx, time_val, height, value):
-#         """Record one peak-to-trajectory assignment from Hungarian or NN."""
-#         self.assigned_times[gaussian_idx].append(time_val)
-#         self.assigned_heights[gaussian_idx].append(height)
-#         self.assigned_values[gaussian_idx].append(value)
-
-#     def get_assignment_data(self, gaussian_idx):
-#         """Return ``(times, heights)`` for the optimal assignment of Gaussian k."""
-#         return self.assigned_times[gaussian_idx], self.assigned_heights[gaussian_idx]
-
-#     def get_heights_dict_non_empty(self):
-#         """Return ``{time: heights}`` filtered to times with detections."""
-#         return {t: h for t, h in self.receiver_heights_by_time.items() if h}
-
-#     def get_heights_sorted_by_time(self):
-#         """Return detected heights sorted bottom-to-top at each time point."""
-#         return [sorted(h) for h in self.receiver_heights_by_time.values()]
-
-
-
-    # def generate_projections(self, t, theta_dict, loss_type=None):
-    #     """Compute X-ray projections for all sources and time steps.
-
-    #     Parameters
-    #     ----------
-    #     t : torch.Tensor
-    #         Time vector.
-    #     theta_dict : dict
-    #         Parameter dict with keys
-    #         ``'alphas', 'U_skews', 'omegas', 'x0s', 'v0s', 'a0s'``.
-    #     loss_type : str, optional
-    #         When set, merges ``self.theta_fixed`` into *theta_dict*
-    #         (used internally during optimization).
-
-    #     Returns
-    #     -------
-    #     list of torch.Tensor
-    #         Projections for each source, shape ``(n_times, n_receivers)``.
-    #     """
-    #     rot_mat_funcs = self.construct_rotation_matrix_funcs()
-    #     traj_funcs = self.construct_trajectory_funcs()
-    #     projs = [
-    #         torch.zeros(len(t), self.n_rcvrs, dtype=torch.float64, device=self.device)
-    #         for _ in range(self.n_sources)
-    #     ]
-
-    #     if loss_type is not None:
-    #         complete_theta_dict = theta_dict.copy()
-    #         for key, value in self.theta_fixed.items():
-    #             if key not in complete_theta_dict:
-    #                 complete_theta_dict[key] = value
-    #         theta_dict = complete_theta_dict
-
-    #     EPS = 1e-10
-
-    #     for n_t, t_n in enumerate(t):
-    #         rot_mat_of_t = rot_mat_funcs(t_n, theta_dict)
-    #         traj_of_t = traj_funcs(t_n, theta_dict)
-
-    #         for n_s, s in enumerate(self.sources):
-    #             receivers_ns = self.receivers[n_s]
-    #             r = torch.stack(receivers_ns)
-
-    #             r_minus_s = r - s
-    #             r_minus_s_hat = r_minus_s / torch.norm(r_minus_s, dim=1, keepdim=True)
-
-    #             for k in range(self.N):
-    #                 alpha_k = theta_dict['alphas'][k].squeeze()
-    #                 U_k = theta_dict['U_skews'][k]
-    #                 R_k_of_t = rot_mat_of_t[k]
-    #                 mu_k_of_t = traj_of_t[k]
-    #                 new_U_k = U_k @ R_k_of_t.mT
-
-    #                 U_r_hat = new_U_k @ r_minus_s_hat.T
-    #                 U_r = new_U_k @ r_minus_s.T
-    #                 U_traj = new_U_k @ (s - mu_k_of_t).unsqueeze(1)
-
-    #                 norm_term = torch.norm(U_r_hat, dim=0)
-    #                 quotient_term = self.sqrt_pi * alpha_k / (norm_term + EPS)
-
-    #                 inner_prod_sq = torch.sum(U_r * U_traj, dim=0) ** 2
-    #                 divisor = torch.norm(U_r, dim=0) ** 2 + EPS
-    #                 subtractor = torch.norm(U_traj, dim=0) ** 2
-
-    #                 exp_arg = inner_prod_sq / divisor - subtractor
-    #                 projs[n_s][n_t] += quotient_term * torch.exp(exp_arg)
-
-    #     return projs
-    
-    
-    
-        # def construct_rotation_matrix_funcs(self):
-    #     """Return a callable ``f(t, theta) -> list of (d, d) rotation matrices``."""
-    #     two_pi = 2 * torch.pi
-
-    #     def all_rot_mat_funcs(t, theta):
-    #         rot_matrices = []
-    #         for k in range(self.N):
-    #             omegas_k = theta['omegas'][k]
-    #             kth_rot_mat = torch.eye(self.d, dtype=torch.float64, device=self.device)
-    #             for n_rots, omega in enumerate(omegas_k):
-    #                 i, j = torch.combinations(
-    #                     torch.arange(self.d, device=self.device), r=2
-    #                 )[n_rots]
-    #                 rot_mat = torch.eye(self.d, dtype=torch.float64, device=self.device)
-    #                 rot_mat[i, i] = torch.cos(two_pi * omega * t)
-    #                 rot_mat[i, j] = -torch.sin(two_pi * omega * t)
-    #                 rot_mat[j, i] = torch.sin(two_pi * omega * t)
-    #                 rot_mat[j, j] = torch.cos(two_pi * omega * t)
-    #                 kth_rot_mat = kth_rot_mat @ rot_mat
-    #             rot_matrices.append(kth_rot_mat)
-    #         return rot_matrices
-
-    #     return all_rot_mat_funcs
-
-    # def construct_trajectory_funcs(self):
-    #     """Return a callable ``f(t, theta) -> list of position tensors``.
-
-    #     Trajectory: ``μ_k(t) = x0_n + v0_k·t + ½·a0_k·t²``
-    #     """
-    #     def all_traj_funcs(t, theta):
-    #         trajectories = []
-    #         for k in range(self.N):
-    #             x0, v0, a0 = theta['x0s'][k], theta['v0s'][k], theta['a0s'][k]
-    #             if t.dim() == 0 or (t.dim() == 1 and t.shape[0] == 1):
-    #                 trajectories.append(x0 + v0 * t + 0.5 * a0 * t ** 2)
-    #             else:
-    #                 t_r = t.unsqueeze(1)
-    #                 trajectories.append(x0 + v0 * t_r + 0.5 * a0 * t_r ** 2)
-    #         return trajectories
-
-    #     return all_traj_funcs
-
-    # def process_projections(self, projections):
-    #     """Flatten multi-source projections to a single ``(n_times, n_rcvrs)`` tensor."""
-    #     if self.n_sources == 1:
-    #         return projections[0]
-    #     return torch.cat(projections, dim=0)

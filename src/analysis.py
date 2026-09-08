@@ -9,45 +9,51 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-from .config import AnalysisConfig
+from .config import AnalysisConfig, ExperimentConfig
 from .model import GMM_reco
 
 logger = logging.getLogger(__name__)
     
 def run_analysis(
-    experiment_dir: Path,
-    analysis_cfg: AnalysisConfig | None = None,
+    exp_dir: Path,
+    cfg: ExperimentConfig,
 ) -> None:
     """Load unified results bundle and execute complete post-reconstruction analysis."""
-    experiment_dir = Path(experiment_dir)
-    results_path = experiment_dir / "results.pt"
+    exp_dir = Path(exp_dir)
+    results_path = exp_dir
     
     if not results_path.exists():
         raise FileNotFoundError(f"Cannot run analysis: missing {results_path}")
     
-    data = torch.load(results_path, map_location="cpu", weights_only=False)
+    logger.info(f"Loading from {results_path}")
+    gt_data = torch.load(results_path / "ground_truth.pt" , map_location="cpu", weights_only=False)
+    est_data = torch.load(results_path / "reconstruction.pt" , map_location="cpu", weights_only=False)
+    proj_data = torch.load(results_path / "projections.pt" , map_location="cpu", weights_only=False)
     
-    analyze_results(
-        theta_true=data["theta_true"],
-        theta_est=data["theta_est"]
+    geometry_cfg = cfg.geometry
+    physics_cfg = cfg.physics
+    omega_min, omega_max = physics_cfg.omega_range
+    device = torch.device(
+        cfg.device if cfg.device else ("cuda" if torch.cuda.is_available() else "cpu")
     )
+    sources, receivers = geometry_cfg.to_tensors(device=device)
     
     analyze_results(
-        theta_true=data["theta_true"],
-        theta_est=data["theta_est"],
-        theta_init=data.get("theta_init"),
-        theta_stage1_init=data.get("theta_stage1_init"),
-        proj_data=data["proj_data"],
-        t=data["t"],
-        sources=data["sources"],
-        receivers=data["receivers"],
-        d=data["config"]["d"],
-        N=data["config"]["N"],
-        omega_min=data["config"]["omega_min"],
-        omega_max=data["config"]["omega_max"],
-        device=torch.device(data["config"]["device"]),
-        experiment_dir=experiment_dir,
-        analysis_cfg=analysis_cfg,
+        theta_true=gt_data["theta_true"],
+        theta_est=est_data["theta_est"],
+        theta_init=est_data.get("theta_init"),
+        theta_stage1_init=est_data.get("theta_stage1_init"),
+        proj_data=proj_data["projections"],
+        t=proj_data["times"],
+        sources=sources,
+        receivers=receivers,
+        d=geometry_cfg.dimensionality,
+        N=cfg.reco_n_gaussians,
+        omega_min=omega_min,
+        omega_max=omega_max,
+        device=cfg.device,
+        exp_dir=exp_dir,
+        analysis_cfg=cfg.analysis,
     )
     
     
@@ -66,9 +72,8 @@ def analyze_results(
     omega_min: float,
     omega_max: float,
     device: torch.device,
-    experiment_dir: Path,
+    exp_dir: Path,
     analysis_cfg: AnalysisConfig | None = None,
-    res: dict | None = None,
 ):
     """Compute relative parameter errors and output publication PDF plots."""
     from .visualization.publication import (
@@ -82,9 +87,6 @@ def analyze_results(
     )
     from .visualization.animations import animate_GMM_motion
 
-    if analysis_cfg is None:
-        analysis_cfg = AnalysisConfig()
-
     # Match permutations: align estimated indices to true particles by trajectory
     theta_est, matching_indices = reorder_theta_to_match_true(theta_true, theta_est, N)
     logger.info("Permutation matching (est -> true): %s", matching_indices)
@@ -96,9 +98,14 @@ def analyze_results(
     if not analysis_cfg.skip_errors:
         x0s, a0s = theta_true["x0s"], theta_true["a0s"]
         model = GMM_reco(
-            d, N, sources, receivers, x0s, a0s,
-            omega_min, omega_max, device=device,
-            output_dir=experiment_dir,
+            d=d, N=N, 
+            sources=sources, 
+            receivers=receivers, 
+            x0s=x0s, a0s=a0s,
+            omega_min=omega_min, 
+            omega_max=omega_max, 
+            device=device,
+            output_dir=exp_dir,
         )
 
         errors_init = _compute_parameter_errors(theta_true, theta_init, N) if theta_init else {}
@@ -114,7 +121,7 @@ def analyze_results(
             _plot_error_table(
                 errors_init, errors_final,
                 proj_err_init, proj_err_final,
-                experiment_dir / "error_analysis.pdf",
+                exp_dir / "error_analysis.pdf",
             )
 
     # --- PDF Figure Generation ---
@@ -125,7 +132,7 @@ def analyze_results(
             sources=sources, 
             receivers=receivers, 
             d=d,
-            filename=experiment_dir / "acquisition_geometry_exact.pdf",
+            filename=exp_dir / "acquisition_geometry_exact.pdf",
         )
 
         plot_individual_gaussian_reconstruction(
@@ -133,7 +140,7 @@ def analyze_results(
             theta_est=theta_est, 
             K=N, d=d,
             gaussian_indices=range(N),
-            filename=experiment_dir / "individual_gaussian_reconstruction.pdf",
+            filename=exp_dir / "individual_gaussian_reconstruction.pdf",
             theta_init=theta_stage1_init,
         )
 
@@ -143,8 +150,9 @@ def analyze_results(
                 receivers=receivers, 
                 theta_true=theta_true, 
                 theta_est=theta_init, 
+                output_dir=exp_dir,
                 t=t, K=N, d=d,
-                filename=experiment_dir / "initial_temporal_gmm_comparison.pdf",
+                filename=exp_dir / "initial_temporal_gmm_comparison.pdf",
                 title="Stage 2 Initialization",
             )
 
@@ -153,31 +161,37 @@ def analyze_results(
             receivers=receivers,
             theta_true=theta_true,
             theta_est=theta_est,
-            t=t,K=N,d=d,
-            filename=experiment_dir / "temporal_gmm_comparison.pdf",
+            t=t, K=N, d=d,
+            output_dir=exp_dir,
+            filename=exp_dir / "temporal_gmm_comparison.pdf",
             title="Reconstruction",
         )
         
         proj_2d = proj_data[0] if isinstance(proj_data, (list, tuple)) else proj_data
-        plot_sinogram(proj_2d, t, receivers, filename=experiment_dir / "observed_sinogram.pdf")        
+        plot_sinogram(proj_2d, t, receivers, filename=exp_dir / "observed_sinogram.pdf")        
         plot_projection_modes(
             proj_mixture=proj_2d, 
             t=t, 
             receivers=receivers,
             title="Projection Modes",
-            filename=experiment_dir / "projection_modes.pdf"
+            filename=exp_dir / "projection_modes.pdf"
         )
 
 
     # --- Animation ---
-    # if not analysis_cfg.skip_animations:
-    #     logger.info("Generating animation...")
-    #     anim = animate_temporal_gmm_comparison(
-    #         sources, receivers, theta_true, theta_est, t, N, d,
-    #         filename=experiment_dir / "temporal_gmm_comparison.mp4",
-    #     )
+    if not analysis_cfg.skip_animations:
+        logger.info("Generating animation...")
+        anim = animate_temporal_gmm_comparison(
+            sources=sources, 
+            receivers=receivers, 
+            theta_true=theta_true, 
+            theta_est=theta_est, 
+            t=t, K=N, d=d,
+            output_dir=exp_dir,
+            filename=exp_dir / "temporal_gmm_comparison.mp4",
+        )
 
-    logger.info("All analysis outputs written to: %s", experiment_dir)
+    logger.info("All analysis outputs written to: %s", exp_dir)
 
 
 # ======================================================================

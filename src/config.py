@@ -13,24 +13,26 @@ import yaml
 
 GRAVITATIONAL_ACCELERATION = 9.81  # m/s²
 
+
 # ---------------------------------------------------------------------------
-# Core Components
+# Section Dataclasses
 # ---------------------------------------------------------------------------
+
 @dataclass
 class GeometryConfig:
     """CT geometry: sources and receiver array specification."""
-
+    
     sources: List[List[float]]
     receivers: dict
-
+    
     @property
     def dimensionality(self) -> int:
         return len(self.sources[0])
-
+    
     def to_tensors(self, device: torch.device):
         """Return (sources, receivers) as torch tensors on *device*."""
         from .utils import construct_receivers
-
+        
         sources_t = [
             torch.tensor(s, dtype=torch.float64, device=device)
             for s in self.sources
@@ -53,21 +55,25 @@ class GeometryConfig:
         else:
             raise ValueError(f"Unsupported dimensionality: {d}")
         return sources_t, receivers_t
+    
 
 @dataclass
 class PhysicsConfig:
-    """Known physical parameters for all Gaussians."""
-
+    """Physical parameters and forward simulation dynamics."""
+    
     initial_positions: List[List[float]]
-    accelerations: List[List[float]]
-    omega_range: Tuple[float, float] = (-24.0, -16.0)
-
+    initial_accelerations: List[List[float]]
+    omega_range: Tuple[float, float] = (2.0, 6.0)
+    n_projections: int = 150
+    duration: float = 1.5
+    initial_velocities: List[float] = field(default_factory=lambda: [0.75, 0.5])
+    
     def to_tensors(self, n_gaussians: int, device: torch.device):
-        """Return (x0s, a0s) as per-Gaussian tensor lists on *device*."""
+        """Return (x0s, a0s) as per-Gaussian tensor lists on device."""
         x0s = self._broadcast(self.initial_positions, n_gaussians, device)
-        a0s = self._broadcast(self.accelerations, n_gaussians, device)
+        a0s = self._broadcast(self.initial_accelerations, n_gaussians, device)
         return x0s, a0s
-
+    
     @staticmethod
     def _broadcast(values, n, device):
         tensors = [torch.tensor(v, dtype=torch.float64, device=device) for v in values]
@@ -76,135 +82,90 @@ class PhysicsConfig:
         if len(tensors) != n:
             raise ValueError(f"Expected 1 or {n} entries, got {len(tensors)}")
         return tensors
+    
 
 @dataclass
-class SimulationSettings:
-    """Settings for synthetic data generation."""
-    seed: int = 40
-    n_projections: int = 65
-    duration: float = 2.0
-    initial_velocity: List[float] = field(default_factory=lambda: [0.75, 0.5])
-
-@dataclass
-class ReconstructionSettings:
+class ReconstructionConfig:
     """Tuning knobs for the 4-stage reconstruction pipeline."""
-    N_trajectory_trials: Optional[int] = None
-    N_omega_inits: Optional[int] = None
+    
+    n_trajectory_trials: Optional[int] = None
+    n_omega_inits: Optional[int] = None
     max_iterations: int = 500
     tolerance: float = 1e-5
+    
     
 @dataclass
 class AnalysisConfig:
     """Post-reconstruction analysis settings."""
+    
     enabled: bool = True
     skip_errors: bool = False
     skip_plots: bool = False
     skip_animations: bool = False
     time_indices: Optional[List[int]] = None
+    
 
 @dataclass
 class OutputConfig:
-    """Output directory and what to save."""
-    directory: Union[str, Path] = "results"
+    """Output directory and artifact toggles."""
+    
+    directory: Union[str, Path] = "data/"
     save_plots: bool = True
     save_animations: bool = True
-    verbose: bool = False
-
-    def __post_init__(self):
-        self.directory = Path(self.directory)
-
-
-# ---------------------------------------------------------------------------
-# Sub-level Pipeline Executable Schemas
-# ---------------------------------------------------------------------------
-@dataclass
-class SimulateConfig:
-    """Config subset passed into run_simulation()."""
-    n_gaussians: int
-    geometry: GeometryConfig
-    physics: PhysicsConfig
-    simulation: SimulationSettings = field(default_factory=SimulationSettings)
-    output: OutputConfig = field(default_factory=OutputConfig)
-    device: Optional[str] = None
+    verbose: bool = True
     
-@dataclass
-class ReconstructConfig:
-    """Config subset passed into run_reconstruction()."""
-    data_path: str
-    n_gaussians: int
-    geometry: GeometryConfig
-    physics: PhysicsConfig
-    reconstruction: ReconstructionSettings = field(default_factory=ReconstructionSettings)
-    output: OutputConfig = field(default_factory=OutputConfig)
-    analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
-    device: Optional[str] = None
-
-
+    def __post_init__(self): 
+        self.directory = Path(self.directory)
+        
+        
 # ---------------------------------------------------------------------------
-# Master Top-Level Experiment Config
+# Master Configuration
 # ---------------------------------------------------------------------------
+
 @dataclass
 class ExperimentConfig:
-    """Unified master configuration for the entire GMM-CT pipeline."""
+    """Single master configuration for simulation, reconstruction, and analysis."""
+    
     geometry: GeometryConfig
     physics: PhysicsConfig
-    sim_n_gaussians: int = 5
-    reco_n_gaussians: Optional[int] = None  # Defaults to sim_n_gaussians if None
-    data_path: Optional[Union[str, Path]] = None
-    simulation: SimulationSettings = field(default_factory=SimulationSettings)
-    reconstruction: ReconstructConfig = field(default_factory=ReconstructionSettings)
+    reconstruction: ReconstructionConfig = field(default_factory=ReconstructionConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
-    device: Optional[int] = None
     
-    def __post__init__(self):
+    sim_n_gaussians: int = 5
+    reco_n_gaussians: Optional[int] = None
+    data_path: Optional[Union[str, Path]] = None
+    device: Optional[str] = None
+    seed: int = 9
+    
+    def __post_init__(self):
         if self.reco_n_gaussians is None:
             self.reco_n_gaussians = self.sim_n_gaussians
+        if self.data_path is None:
+            self.data_path = self.output.directory / "projections.pt"
+        else:
+            self.data_path = Path(self.data_path)
             
-    @property
-    def simulate(self) -> SimulateConfig:
-        """Extract SimulateConfig projection."""
-        return SimulateConfig(
-            n_gaussians=self.sim_n_gaussians,
-            geometry=self.geometry,
-            physics=self.physics,
-            simulation=self.simulation,
-            output=self.output,
-            device=self.device,
-        )
-        
-    @property
-    def reconstruct(self) -> ReconstructConfig:
-        """Extract ReconstructConfig projection."""
-        d_path = self.data_path if self.data_path else self.output.directory / "projections.pt"
-        return ReconstructConfig(
-            data_path=d_path,
-            n_gaussians=self.reco_n_gaussians,
-            geometry=self.geometry,
-            physics=self.physics,
-            reconstruction=self.reconstruction,
-            output=self.output,
-            analysis=self.analysis,
-            device=self.device,
-        )
-
 
 # ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
 
 def load_experiment_config(path: Union[str, Path]) -> ExperimentConfig:
-    """Load unified ExperimentConfig from YAML."""
+    """Load unified ExperimentConfig directly from a YAML file."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
     
-    with open(path) as f:
+    with open(path, "r") as f:
         raw = yaml.safe_load(f)
         
     model_raw = raw.get("model", {})
     sim_n = model_raw.get("sim_n_gaussians", model_raw.get("n_gaussians", 5))
     reco_n = model_raw.get("reco_n_gaussians", sim_n)
+    
+    physics_raw = raw.get("physics", {})
+    omega = physics_raw.get("omega_range", [2.0, 6.0])
     
     return ExperimentConfig(
         geometry=GeometryConfig(
@@ -212,19 +173,255 @@ def load_experiment_config(path: Union[str, Path]) -> ExperimentConfig:
             receivers=raw["geometry"]["receivers"],
         ),
         physics=PhysicsConfig(
-            initial_positions=raw["physics="["initial_positions"]],
-            accelerations=raw["physics"]["accelerations"],
-            omega_range=tuple(raw["physics"].get("omega_range", [2.0, 6.0])),
+            initial_positions=physics_raw["initial_positions"],
+            initial_accelerations=physics_raw["initial_accelerations"],
+            omega_range=tuple(omega),
+            n_projections=physics_raw.get("n_projections", 150),
+            duration=physics_raw.get("duration", 1.5),
+            initial_velocities=physics_raw.get("initial_velocities", [0.75, 0.5])
         ),
+        reconstruction=ReconstructionConfig(**raw.get("reconstruction", {})),
+        analysis=AnalysisConfig(**raw.get("analysis", {})),
+        output=OutputConfig(**raw.get("output", {})),
         sim_n_gaussians=sim_n,
         reco_n_gaussians=reco_n,
         data_path=raw.get("data", {}).get("projections"),
-        simulation=SimulationSettings(**raw.get("simulation", {})),
-        reconstruction=ReconstructionSettings(**raw.get("reconstruction", {})),
-        analysis=AnalysisConfig(**raw.get("analysis", {})),
-        output=OutputConfig(**raw.get("output", {})),
         device=raw.get("device"),
-        )
+        seed=raw.get("seed", 9),
+    )
+    
+    
+
+
+
+# # ---------------------------------------------------------------------------
+# # Core Components
+# # ---------------------------------------------------------------------------
+# @dataclass
+# class GeometryConfig:
+#     """CT geometry: sources and receiver array specification."""
+
+#     sources: List[List[float]]
+#     receivers: dict
+
+#     @property
+#     def dimensionality(self) -> int:
+#         return len(self.sources[0])
+
+#     def to_tensors(self, device: torch.device):
+#         """Return (sources, receivers) as torch tensors on *device*."""
+#         from .utils import construct_receivers
+
+#         sources_t = [
+#             torch.tensor(s, dtype=torch.float64, device=device)
+#             for s in self.sources
+#         ]
+#         rcv = self.receivers
+#         d = self.dimensionality
+#         if d == 2:
+#             receivers_t = construct_receivers(
+#                 device,
+#                 (rcv["n_receivers"], rcv["x_coordinate"], rcv["y_min"], rcv["y_max"]),
+#             )
+#         elif d == 3:
+#             receivers_t = construct_receivers(
+#                 device,
+#                 (
+#                     rcv["n_receivers_y"], rcv["n_receivers_z"], rcv["x_coordinate"], 
+#                     rcv["y_min"], rcv["y_max"], rcv["z_min"], rcv["z_max"]
+#                 ),
+#             )
+#         else:
+#             raise ValueError(f"Unsupported dimensionality: {d}")
+#         return sources_t, receivers_t
+
+# @dataclass
+# class PhysicsConfig:
+#     """Known physical parameters for all Gaussians."""
+
+#     initial_positions: List[List[float]]
+#     accelerations: List[List[float]]
+#     omega_range: Tuple[float, float]
+#     n_projections: int
+#     duration: float
+#     initial_velocity: List[float]
+
+#     def to_tensors(self, n_gaussians: int, device: torch.device):
+#         """Return (x0s, a0s) as per-Gaussian tensor lists on *device*."""
+#         x0s = self._broadcast(self.initial_positions, n_gaussians, device)
+#         a0s = self._broadcast(self.accelerations, n_gaussians, device)
+#         return x0s, a0s
+
+#     @staticmethod
+#     def _broadcast(values, n, device):
+#         tensors = [torch.tensor(v, dtype=torch.float64, device=device) for v in values]
+#         if len(tensors) == 1:
+#             tensors = [tensors[0].clone() for _ in range(n)]
+#         if len(tensors) != n:
+#             raise ValueError(f"Expected 1 or {n} entries, got {len(tensors)}")
+#         return tensors
+    
+    
+# # ---------------------------------------------------------------------------
+# # Settings
+# # ---------------------------------------------------------------------------
+
+# @dataclass
+# class SimulationSettings:
+#     """Settings for synthetic data generation."""
+#     seed: int = 40
+#     n_projections: int = 65
+#     duration: float = 2.0
+#     initial_velocity: List[float] = field(default_factory=lambda: [0.75, 0.5])
+
+# @dataclass
+# class ReconstructionSettings:
+#     """Tuning knobs for the 4-stage reconstruction pipeline."""
+#     N_trajectory_trials: Optional[int] = None
+#     N_omega_inits: Optional[int] = None
+#     max_iterations: int = 500
+#     tolerance: float = 1e-5
+    
+# @dataclass
+# class AnalysisConfig:
+#     """Post-reconstruction analysis settings."""
+#     enabled: bool = True
+#     skip_errors: bool = False
+#     skip_plots: bool = False
+#     skip_animations: bool = False
+#     time_indices: Optional[List[int]] = None
+
+# @dataclass
+# class OutputConfig:
+#     """Output directory and what to save."""
+#     directory: Union[str, Path] = "results"
+#     save_plots: bool = True
+#     save_animations: bool = True
+#     verbose: bool = False
+
+#     def __post_init__(self):
+#         self.directory = Path(self.directory)
+
+
+# # ---------------------------------------------------------------------------
+# # Sub-level Pipeline Executable Schemas
+# # ---------------------------------------------------------------------------
+# @dataclass
+# class SimulateConfig:
+#     """Config subset passed into run_simulation()."""
+#     n_gaussians: int
+#     geometry: GeometryConfig
+#     physics: PhysicsConfig
+#     simulation: SimulationSettings = field(default_factory=SimulationSettings)
+#     output: OutputConfig = field(default_factory=OutputConfig)
+#     device: Optional[str] = None
+#     seed: Optional[int] = 42
+    
+# @dataclass
+# class ReconstructConfig:
+#     """Config subset passed into run_reconstruction()."""
+#     data_path: str
+#     n_gaussians: int
+#     geometry: GeometryConfig
+#     physics: PhysicsConfig
+#     reconstruction: ReconstructionSettings = field(default_factory=ReconstructionSettings)
+#     output: OutputConfig = field(default_factory=OutputConfig)
+#     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
+#     device: Optional[str] = None
+
+
+# # ---------------------------------------------------------------------------
+# # Master Top-Level Experiment Config
+# # ---------------------------------------------------------------------------
+# @dataclass
+# class ExperimentConfig:
+#     """Unified master configuration for the entire GMM-CT pipeline."""
+#     geometry: GeometryConfig
+#     physics: PhysicsConfig
+#     sim_n_gaussians: int = 5
+#     reco_n_gaussians: Optional[int] = None  # Defaults to sim_n_gaussians if None
+#     data_path: Optional[Union[str, Path]] = None
+#     simulation: SimulationSettings = field(default_factory=SimulationSettings)
+#     reconstruction: ReconstructConfig = field(default_factory=ReconstructionSettings)
+#     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
+#     output: OutputConfig = field(default_factory=OutputConfig)
+#     device: Optional[int] = None
+#     seed: int = 8
+#     # print(f"Yet the seed here is {seed}")
+    
+#     def __post__init__(self):
+#         if self.reco_n_gaussians is None:
+#             self.reco_n_gaussians = self.sim_n_gaussians
+            
+#     @property
+#     def simulate(self) -> SimulateConfig:
+#         """Extract SimulateConfig projection."""
+#         return SimulateConfig(
+#             n_gaussians=self.sim_n_gaussians,
+#             geometry=self.geometry,
+#             physics=self.physics,
+#             simulation=self.simulation,
+#             output=self.output,
+#             device=self.device,
+#             seed=self.seed,
+#         )
+        
+#     @property
+#     def reconstruct(self) -> ReconstructConfig:
+#         """Extract ReconstructConfig projection."""
+#         d_path = self.data_path if self.data_path else self.output.directory / "projections.pt"
+#         return ReconstructConfig(
+#             data_path=d_path,
+#             n_gaussians=self.reco_n_gaussians,
+#             geometry=self.geometry,
+#             physics=self.physics,
+#             reconstruction=self.reconstruction,
+#             output=self.output,
+#             analysis=self.analysis,
+#             device=self.device,
+#         )
+
+
+# # ---------------------------------------------------------------------------
+# # Loader
+# # ---------------------------------------------------------------------------
+
+# def load_experiment_config(path: Union[str, Path]) -> ExperimentConfig:
+#     """Load unified ExperimentConfig from YAML."""
+#     path = Path(path)
+#     if not path.exists():
+#         raise FileNotFoundError(f"Config file not found: {path}")
+    
+#     with open(path) as f:
+#         raw = yaml.safe_load(f)
+        
+#     model_raw = raw.get("model", {})
+#     sim_n = model_raw.get("sim_n_gaussians", model_raw.get("n_gaussians", 5))
+#     reco_n = model_raw.get("reco_n_gaussians", sim_n)
+#     print(f"The seed is {raw.get("seed")}")
+    
+#     return ExperimentConfig(
+#         geometry=GeometryConfig(
+#             sources=raw["geometry"]["sources"],
+#             receivers=raw["geometry"]["receivers"],
+#         ),
+#         physics=PhysicsConfig(
+#             initial_positions=raw["physics"]["initial_positions"],
+#             accelerations=raw["physics"]["accelerations"],
+#             omega_range=tuple(raw["physics"].get("omega_range", [2.0, 6.0])),
+#             n_projections=raw["physics"].get("n_projections", 150),
+#             duration=raw["physics"].get("duration, 1.5"),
+#             initial_velocity=raw["physics"].get("initial_velocity", [0.75, 0.5]),
+#         ),
+#         sim_n_gaussians=sim_n,
+#         reco_n_gaussians=reco_n,
+#         data_path=raw.get("data", {}).get("projections"),
+#         simulation=SimulationSettings(**raw.get("simulation", {})),
+#         reconstruction=ReconstructionSettings(**raw.get("reconstruction", {})),
+#         analysis=AnalysisConfig(**raw.get("analysis", {})),
+#         output=OutputConfig(**raw.get("output", {})),
+#         device=raw.get("device"),
+#         )
 
 
 

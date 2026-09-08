@@ -87,6 +87,14 @@ class PeakData:
     ) -> tuple[List[List[float]], List[List[float]]]:
         return self.assigned_times[gaussian_idx], self.assigned_heights[gaussian_idx]
     
+    def get_heights_dict_non_empty(self):
+        """Return ``{time: heights}`` filtered to times with detections."""
+        return {t: h for t, h in self.receiver_heights_by_time.items() if h}
+
+    def get_heights_sorted_by_time(self):
+        """Return detected heights sorted bottom-to-top at each time point."""
+        return [sorted(h) for h in self.receiver_heights_by_time.values()]
+    
     
     
 # ==========================================================================

@@ -30,23 +30,23 @@ logging.basicConfig(
 
 import torch
 
-from .config import SimulateConfig
+from .config import ExperimentConfig
 from .model import GMM_reco
 from .utils import export_parameters, generate_true_param, set_random_seeds
 
-from gmm_ct.visualization.simulate_viz import (animate_simulation,
-                                               export_poster_gmm_figure,
-                                               export_poster_snapshot_sinogram_figure,
+from .visualization.simulate_viz import (animate_simulation,
+                                         export_poster_gmm_figure,
+                                         export_poster_snapshot_sinogram_figure,
 )                                         
 
 logger = logging.getLogger(__name__)
 
 
-def run_simulation(cfg: SimulateConfig) -> Path:
+def run_simulation(cfg: ExperimentConfig) -> Path:
     """Generate synthetic projection data from a YAML-driven config."""
 
     # --- Reproducibility & Device ---
-    set_random_seeds(cfg.simulation.seed)
+    set_random_seeds(cfg.seed)
     device = torch.device(
         cfg.device if cfg.device else ("cuda" if torch.cuda.is_available() else "cpu")
     )
@@ -55,45 +55,58 @@ def run_simulation(cfg: SimulateConfig) -> Path:
     sources, receivers = cfg.geometry.to_tensors(device)
     d = cfg.geometry.dimensionality
 
-    N = cfg.n_gaussians
+    N = cfg.sim_n_gaussians
     x0s, a0s = cfg.physics.to_tensors(N, device)
     omega_min, omega_max = cfg.physics.omega_range
+    n_proj = cfg.physics.n_projections
 
     # --- Time mesh ---
     t = torch.linspace(
         0.0,
-        cfg.simulation.duration,
-        cfg.simulation.n_projections,
+        cfg.physics.duration,
+        cfg.physics.n_projections,
         dtype=torch.float64,
         device=device,
     )
 
     # --- Ground truth parameters ---
     v_base = torch.tensor(
-        cfg.simulation.initial_velocity, dtype=torch.float64, device=device
+        cfg.physics.initial_velocities, dtype=torch.float64, device=device
     )
     # generate_true_param also takes x0, v0, a0 base vectors
     theta_true = generate_true_param(
-        d, N, x0s[0], v_base, a0s[0], omega_min, omega_max, device=device,
+        d=d, N=N, 
+        initial_location=x0s[0], 
+        initial_velocity=v_base,    # Gets perturbed by noise to provide different true v0s
+        initial_acceleration=a0s[0], 
+        min_rot=omega_min, 
+        max_rot=omega_max, 
+        device=device,
     )
-
-    # --- Generate projection data ---
-    logger.info(f"Generating projections...")
-    model = GMM_reco(
-        d, N, sources, receivers, x0s, a0s,
-        omega_min, omega_max, device=device,
-    )
-    proj_data = model.generate_projections(t, theta_true)
 
     # --- Output directory ---
     out_dir = Path(cfg.output.directory)
     if getattr(cfg.output, "use_timestamp", False):
-        folder_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_seed{cfg.simulation.seed}_N{N}"
+        folder_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_seed{cfg.seed}_N{N}"
     else:
-        folder_name = f"sim_seed{cfg.simulation.seed}_N{N}"
+        folder_name = f"seed{cfg.seed}_N{N}_nproj{n_proj}"
     
-    experiment_dir = out_dir / folder_name
-    experiment_dir.mkdir(parents=True, exist_ok=True)
+    exp_dir = out_dir / folder_name
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Saving to: {exp_dir}")
+
+    # --- Generate projection data ---
+    logger.info(f"Generating projections...")
+    model = GMM_reco(
+        d=d, N=N, 
+        sources=sources, 
+        receivers=receivers, 
+        x0s=x0s, a0s=a0s,
+        omega_min=omega_min, 
+        omega_max=omega_max, 
+        output_dir=exp_dir,
+    )
+    proj_data = model.generate_projections(t, theta_true)
 
     # --- Save projections ---
     proj_tensor = model.process_projections(proj_data)
@@ -102,7 +115,7 @@ def run_simulation(cfg: SimulateConfig) -> Path:
             "projections": proj_tensor,
             "times": t,
         },
-        experiment_dir / "projections.pt",
+        exp_dir / "projections.pt",
     )
 
     # --- Save ground truth ---
@@ -114,29 +127,32 @@ def run_simulation(cfg: SimulateConfig) -> Path:
             "config": {
                 "d": d,
                 "N": N,
-                "seed": cfg.simulation.seed,
+                "seed": cfg.seed,
                 "omega_min": omega_min,
                 "omega_max": omega_max,
-                "n_projections": cfg.simulation.n_projections,
-                "duration": cfg.simulation.duration,
+                "n_projections": n_proj,
+                "duration": cfg.physics.duration,
                 "device": str(device),
             },
         },
-        experiment_dir / "ground_truth.pt",
+        exp_dir / "ground_truth.pt",
     )
     export_parameters(
         theta_true,
-        experiment_dir / "true_parameters.md",
+        exp_dir / "true_parameters.md",
         title="Ground Truth Parameters",
     )
 
     # --- Visualizations ---
-    logger.info(f"Generating the plots and animations...")
-    animate_simulation(
-        sim_dir=experiment_dir,
-        output_path=experiment_dir / 'simulation_2d.mp4',
-    )
-    export_poster_gmm_figure(experiment_dir)
-    export_poster_snapshot_sinogram_figure(experiment_dir)
+    # if cfg.analysis.skip_animations:
+    #     pass
+    # else:
+    #     logger.info(f"Generating the plots and animations...")
+    #     animate_simulation(
+    #         sim_dir=exp_dir,
+    #         output_path=exp_dir / 'simulation_2d.mp4',
+    #     )
+    # export_poster_gmm_figure(exp_dir)
+    # export_poster_snapshot_sinogram_figure(exp_dir)
 
-    return experiment_dir
+    return exp_dir

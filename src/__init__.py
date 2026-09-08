@@ -16,16 +16,14 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 # Import main classes and functions for convenient access
 from .config import (
     GRAVITATIONAL_ACCELERATION,
-    # load_reconstruct_config,
-    # load_simulate_config,
     load_experiment_config,
-    ReconstructConfig,
-    SimulateConfig,
+    ReconstructionConfig,
+    ExperimentConfig,
 )
 from .model import GMM_reco, NewtonRaphsonLBFGS
 from .utils import construct_receivers, generate_true_param, set_random_seeds, export_parameters
-from .simulation import run_simulation
-from .reconstruct import run_reconstruction, analyse_results
+from .simulate import run_simulation
+from .reconstruct import run_reconstruction
 from .visualization.animations import (
     save_GMM_animation,
     save_projection_comparison_animation,
