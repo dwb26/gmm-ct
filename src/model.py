@@ -857,25 +857,6 @@ class GMM_reco:
 
         return soln_dict
 
-    # def _loss_joint(self, theta_tensor: torch.Tensor) -> torch.Tensor:
-    #     """Stage 2 loss: Huber loss between simulated and observed projections."""
-    #     loss_func = nn.HuberLoss(delta=0.3)
-    #     has_v0_fixed = hasattr(self, 'theta_fixed') and 'v0s' in self.theta_fixed
-    #     mode = 'joint' if has_v0_fixed else 'joint_with_v0'
-
-    #     theta_dict = self.map_from_tensor_to_dict(theta_tensor, mode=mode)
-    #     for key, value in getattr(self, 'theta_fixed', {}).items():
-    #         if key not in theta_dict:
-    #             theta_dict[key] = value
-
-    #     sim_projs = self.generate_projections(self.t_observable, theta_dict)
-    #     sim_projs_processed = self.process_projections(sim_projs)
-    #     proj_data_observable = self.proj_data[self.peak_data.observable_indices]
-
-    #     return loss_func(proj_data_observable, sim_projs_processed)
-    
-    # Reusing loss function instance or functional form saves micro-allocations in the loop:    
-
     def _loss_joint(self, theta_tensor: torch.Tensor) -> torch.Tensor:
         
         has_v0_fixed = hasattr(self, 'theta_fixed') and 'v0s' in self.theta_fixed
