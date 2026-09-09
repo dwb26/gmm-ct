@@ -21,7 +21,7 @@ def run_experiment(cfg: ExperimentConfig) -> Path:
     
     # Point reconstruction config to the newly generated projection data
     logger.info("=== STEP 2: RECONSTRUCTION ===")
-    soln_dict = run_reconstruction(cfg)
+    run_reconstruction(cfg)
     
     if cfg.analysis.enabled:
         logger.info("=== STEP 3: ANALYSIS ===")

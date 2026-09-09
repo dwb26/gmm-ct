@@ -85,7 +85,6 @@ def analyze_results(
         plot_sinogram,
         reorder_theta_to_match_true,
     )
-    from .visualization.animations import animate_GMM_motion
 
     # Match permutations: align estimated indices to true particles by trajectory
     theta_est, matching_indices = reorder_theta_to_match_true(theta_true, theta_est, N)
@@ -181,7 +180,7 @@ def analyze_results(
     # --- Animation ---
     if not analysis_cfg.skip_animations:
         logger.info("Generating animation...")
-        anim = animate_temporal_gmm_comparison(
+        animate_temporal_gmm_comparison(
             sources=sources, 
             receivers=receivers, 
             theta_true=theta_true, 

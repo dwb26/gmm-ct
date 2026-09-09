@@ -79,19 +79,16 @@ def run_reconstruction(cfg: ExperimentConfig) -> dict:
     device = torch.device(
         cfg.device if cfg.device else ("cuda" if torch.cuda.is_available() else "cpu")
     )
-    logger.info("Device selected: %s", device)
 
     # --- Load Projection Measurements ---
     exp_dir = Path(cfg.data_path)
-    proj_path = exp_dir / 'projections.pt'
-    proj_data, t = _load_projection_data(proj_path, device)
+    proj_data, t = _load_projection_data(exp_dir / 'projections.pt', device)
     logger.info("Loaded projections shape: %s", proj_data[0].shape)
     logger.info("Time mesh: %d steps (%.3fs – %.3fs)", t.shape[0], t[0].item(), t[-1].item())
     logger.info(f"Working with {exp_dir}")
     
     # --- Fetch Ground Truth if Available ---
     gt = _try_load_ground_truth(exp_dir, device)
-    N_reco = cfg.reco_n_gaussians
 
     # --- Model Instantiation ---
     model = GMM_reco.from_config(cfg)
@@ -111,15 +108,12 @@ def run_reconstruction(cfg: ExperimentConfig) -> dict:
     )
 
     # --- Save Standalone Reconstruction Checkpoint ---
-    theta_init = getattr(model, "theta_pre_stage2", None)
-    theta_stage1_init = getattr(model, "theta_pre_stage1_5", None)
-    
     torch.save(
         {
             "theta_est": soln_dict,
-            "theta_init": theta_init,
+            "theta_init": getattr(model, "theta_pre_stage2", None),
             "config": {
-                "n_gaussians": N_reco,
+                "n_gaussians": cfg.reco_n_gaussians,
                 "omega_range": list(cfg.physics.omega_range),
                 "data_path": str(cfg.data_path),
                 "device": str(device),

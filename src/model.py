@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 from torchmin import minimize
 from tqdm.auto import tqdm
@@ -22,7 +23,6 @@ from .utils import NewtonRaphsonLBFGS
 from .structures import PeakData
 
 logger = logging.getLogger(__name__)
-
 
 class GMM_reco:
     """Reconstruct GMM parameters from CT projection data.
@@ -286,6 +286,11 @@ class GMM_reco:
     ) -> dict[str, list[torch.Tensor]]:
         """Multi-start L-BFGS to estimate initial velocities v0."""
         logger.info("Stage 1: Trajectory optimization")
+        
+        self.theta_fixed = {
+        'x0s': [x0.clone().detach() for x0 in self.x0s],
+        'a0s': [a0.clone().detach() for a0 in self.a0s],
+    }
 
         n_traj_trials = self.n_traj_trials or max(20, 2 * self.N)
         logger.info("Running %d trajectory multi-start trials", n_traj_trials)
@@ -374,6 +379,24 @@ class GMM_reco:
             v0s.append(v0)
             
         return v0s
+    
+    def initialize_anisotropic_U_skews(self, v0s, eps=1.0):
+        """Initialise U_skew as diag(30, 15) + small upper-triangular noise.
+
+        The 4:1 aspect ratio ensures Gaussians have a detectable rotation
+        signature in the projections.  Noise on the off-diagonal helps the
+        optimizer recover the true off-diagonal shape.
+        """
+        diag_vals = torch.tensor([30.0, 15.0], dtype=torch.float64, device=self.device)
+        U_skews = []
+        for _ in range(self.N):
+            U_k = torch.diag(diag_vals).clone()
+            if eps > 0:
+                rows, cols = torch.triu_indices(self.d, self.d, offset=1, device=self.device)
+                noise = eps * torch.randn(len(rows), dtype=torch.float64, device=self.device)
+                U_k[rows, cols] = U_k[rows, cols] + noise
+            U_skews.append(U_k)
+        return U_skews
     
     def _detect_all_peaks(
         self, 
@@ -554,105 +577,138 @@ class GMM_reco:
             v0s_refined.append(v0_n_refined.requires_grad_(True))
 
         return v0s_refined
+    
+    def isotropic_derivative_function_over_all_times(
+        self, 
+        v0: torch.Tensor, 
+        *args,
+    ) -> torch.Tensor:
+        """Sum of absolute isotropic projection derivatives across all observed time points."""
+        t_obs, r_list, s, x0, a0 = args
+
+        # Convert list of 1D receiver tensors to a single 2D tensor: [T, 2]
+        r = torch.stack(r_list) if isinstance(r_list, list) else r_list
+
+        # Broadened shapes across T time points
+        t = t_obs.unsqueeze(-1)                              # [T, 1]
+        d = r - s                                            # [T, 2]
+        d1, d2 = d[:, 0], d[:, 1]
+        norm_sq = torch.sum(d**2, dim=-1)                   # [T]
+
+        # Center offsets: [T, 2]
+        c_n = s - x0 - v0 * t - 0.5 * a0 * (t**2)
+
+        h_k = d1 * c_n[:, 0] - s[1] * c_n[:, 1]
+        term_inner = c_n[:, 1] * r[:, 1] + h_k
+
+        R_k_l = 2.0 * norm_sq * c_n[:, 1] * term_inner
+        R_k_r = -2.0 * d2 * (term_inner**2)
+
+        R_k = (R_k_l + R_k_r) / (norm_sq**2)
+
+        # Return total scalar absolute derivative sum across time steps
+        return torch.sum(torch.abs(R_k))
+    
 
     # ==================================================================
     # Stage 1.5 – omega grid search
     # ==================================================================
 
-    def _stage_omega_initialization(self, soln_dict):
+    def _stage_omega_initialization(
+        self, 
+        soln_dict: dict[str, list[torch.tensor]],
+        n_grid: int = 200,
+    ) -> dict[str, list[torch.tensor]]:
         """Per-Gaussian omega estimation via residual-sinogram grid search.
 
         For each Gaussian k, subtracts all other Gaussians' contributions from
         the observed sinogram, then sweeps a uniform grid of omega candidates
         and keeps the one that minimises the residual norm.
         """
+        n_gaussians = len(soln_dict['alphas'])
         n_planes = math.comb(self.d, 2)
-        n_grid = 200
-
         logger.info(
-            "Stage 1.5: Residual-sinogram ω grid search (%d plane(s), %d candidates)",
+            "Stage 1.5a: Residual-sinogram ω grid search (%d plane(s), %d candidates)",
             n_planes, n_grid,
         )
-
+        
         theta_true = getattr(self, 'theta_true', None)
         if theta_true is not None and 'omegas' in theta_true:
             for k, omega_true_k in enumerate(theta_true['omegas']):
-                logger.debug("  Gaussian %d: ω_true = [%s] Hz", k,
-                             ', '.join(f'{w.item():.4f}' for w in omega_true_k.flatten()))
-
+                logger.debug(
+                    "  Gaussian %d: ω_true = [%s] Hz", 
+                    k, ', '.join(f'{w.item():.4f}' for w in omega_true_k.flatten())
+                )
+                
         proj_obs = self.proj_data
         t = self.t
         omega_candidates = torch.linspace(
             self.omega_min, self.omega_max, n_grid,
             dtype=torch.float64, device=self.device,
         )
-
-        gaussian_bar = tqdm(
-            range(self.N),
-            desc='  Gaussians',
-            unit='ρ',
-            leave=False,
-        )
-        for k in gaussian_bar:
-            gaussian_bar.set_description(f'  ρ{k + 1}/{self.N}')
-            # Residual sinogram: observed minus all other Gaussians
+        
+        gaussian_bar = tqdm(range(n_gaussians), desc='  Gaussians', unit='ρ', leave=False)
+        
+        for n in gaussian_bar:
+            gaussian_bar.set_description(f"   ρ{n + 1}/{n_gaussians}")
+        
+            # Compute background projection (all Gaussians EXCEPT n)
             bg_dict = {key: list(vals) for key, vals in soln_dict.items()}
-            bg_dict['alphas'] = [
-                torch.zeros(1, dtype=torch.float64, device=self.device) if j == k
-                else soln_dict['alphas'][j].clone()
-                for j in range(self.N)
+            bg_dict["alphas"] = [
+                torch.zeros(1, dtype=torch.float64, device=self.device) if j == n
+                else soln_dict["alphas"][j]
+                for j in range(n_gaussians)
             ]
+            
             with torch.no_grad():
-                proj_resid = proj_obs - self.process_projections(
-                    self.generate_projections(t, bg_dict)
-                )
-
-            omega_k = soln_dict['omegas'][k].clone()
-
+                proj_bg = self.process_projections(self.generate_projections(t, bg_dict))
+                proj_resid_n = proj_obs - proj_bg
+                
+            omega_n = soln_dict["omegas"][n].clone()
+            
             for plane_idx in range(n_planes):
-                best_loss = float('inf')
-                best_val = omega_k[plane_idx].clone()
-
+                best_loss_n = torch.norm(proj_resid_n).item()
+                best_val_n = omega_n[plane_idx].clone()
+                
                 for omega_val in omega_candidates:
-                    test_omega_k = omega_k.clone()
-                    test_omega_k[plane_idx] = omega_val
-
-                    test_dict = {key: list(vals) for key, vals in soln_dict.items()}
-                    test_dict['omegas'] = [
-                        test_omega_k if j == k else soln_dict['omegas'][j].clone()
-                        for j in range(self.N)
-                    ]
-                    test_dict['alphas'] = [
-                        soln_dict['alphas'][k].clone() if j == k
-                        else torch.zeros(1, dtype=torch.float64, device=self.device)
-                        for j in range(self.N)
-                    ]
-
-                    with torch.no_grad():
-                        proj_k = self.process_projections(
-                            self.generate_projections(t, test_dict)
-                        )
-
-                    loss = torch.norm(proj_resid - proj_k).item()
-                    if loss < best_loss:
-                        best_loss = loss
-                        best_val = omega_val.clone()
-
-                omega_k[plane_idx] = best_val
-
-            soln_dict['omegas'][k] = omega_k
-
-            omega_str = ', '.join(f'{w.item():.4f}' for w in soln_dict['omegas'][k])
+                    test_omega_n = omega_n.clone()
+                    test_omega_n[plane_idx] = omega_val
+                    
+                    test_dict = {
+                        "alphas": [soln_dict["alphas"][n]],
+                        "U_skews": [soln_dict["U_skews"][n]],
+                        "omegas": [test_omega_n],
+                        "x0s": [soln_dict["x0s"][n]],
+                        "v0s": [soln_dict["v0s"][n]],
+                        "a0s": [soln_dict["a0s"][n]],
+                    }
+                    
+                    orig_N = self.N
+                    try:
+                        self.N = 1
+                        with torch.no_grad():
+                            proj_n = self.process_projections(self.generate_projections(t, test_dict))
+                    finally:
+                        self.N = orig_N
+                    
+                    loss_n = torch.norm(proj_resid_n - proj_n).item()
+                    if loss_n < best_loss_n:
+                        best_loss_n = loss_n
+                        best_val_n = omega_val
+                        
+                omega_n[plane_idx] = best_val_n
+                
+            soln_dict["omegas"][n] = omega_n
+            
+            omega_str = ', '.join(f'{w.item():.4f}' for w in soln_dict['omegas'][n])
             if theta_true is not None and 'omegas' in theta_true:
-                omega_true_k = theta_true['omegas'][k]
-                logger.info("  Gaussian %d: ω_est = [%s] Hz | ω_true = [%s] Hz", k,
-                            omega_str,
-                            ', '.join(f'{w.item():.4f}' for w in omega_true_k.flatten()))
+                omega_true_str = ', '.join(f'{w.item():.4f}' for w in theta_true['omegas'][n].flatten())
+                logger.info("  Gaussian %d: ω_est = [%s] Hz | ω_true = [%s] Hz", n, omega_str, omega_true_str)
             else:
-                logger.info("  Gaussian %d: ω = [%s] Hz", k, omega_str)
+                logger.info("  Gaussian %d: ω = [%s] Hz", n, omega_str)
 
         return soln_dict
-
+        
     # ==================================================================
     # Stage 1.5b – alpha NNLS
     # ==================================================================
@@ -664,48 +720,53 @@ class GMM_reco:
         in alphas.  Solves ``min_{α≥0} ‖Φα − p_obs‖₂²`` in closed form.
         """
         logger.info("Stage 1.5b: NNLS alpha initialisation")
-
+        
+        # Restrict to observable time steps and peak data
         t_obs = self.t[self.peak_data.observable_indices]
         p_obs = self.proj_data[self.peak_data.observable_indices]
         T_obs, R = p_obs.shape
-
+        
         Phi = torch.zeros(T_obs * R, self.N, dtype=torch.float64, device=self.device)
+        
         with torch.no_grad():
-            for k in range(self.N):
-                unit_dict = {
-                    'alphas': [
-                        torch.ones(1, dtype=torch.float64, device=self.device) if kk == k
-                        else torch.zeros(1, dtype=torch.float64, device=self.device)
-                        for kk in range(self.N)
-                    ],
-                    'U_skews': soln_dict['U_skews'],
-                    'omegas': soln_dict['omegas'],
-                    'x0s': soln_dict['x0s'],
-                    'v0s': soln_dict['v0s'],
-                    'a0s': soln_dict['a0s'],
+            orig_N = self.N
+            self.N = 1
+            for n in range(orig_N):
+                single_dict = {
+                    "alphas": [torch.ones(1, dtype=torch.float64, device=self.device)],
+                    "U_skews": [soln_dict["U_skews"][n]],
+                    "omegas": [soln_dict["omegas"][n]],
+                    "x0s": [soln_dict["x0s"][n]],
+                    "v0s": [soln_dict["v0s"][n]],
+                    "a0s": [soln_dict["a0s"][n]],
                 }
-                proj_k = self.generate_projections(t_obs, unit_dict)
-                Phi[:, k] = self.process_projections(proj_k).reshape(-1)
-
+                proj_n = self.generate_projections(t_obs, single_dict)
+                Phi[:, n] = self.process_projections(proj_n).reshape(-1)
+            self.N = orig_N
+            
         if not torch.isfinite(Phi).all():
-            logger.warning("Non-finite values in basis matrix; skipping alpha init.")
+            logger.warning("Non-finite values in basis matrix Φ; skipping alpha initialization.")
             return soln_dict
-
-        p_vec_t = p_obs.reshape(-1, 1)
-        result = torch.linalg.lstsq(Phi, p_vec_t, driver='gelsd')
-        alpha_hat = result.solution.squeeze(1).clamp(min=0.0)
-        residual = torch.norm(Phi @ alpha_hat - p_obs.reshape(-1)).item()
-
-        soln_dict['alphas'] = [
-            alpha_hat[k].reshape(1).detach().clone() for k in range(self.N)
+        
+        p_vec = p_obs.reshape(-1, 1)
+        
+        # Solve least squares and project onto non-negative orthant (α ≥ 0)
+        sol = torch.linalg.lstsq(Phi, p_vec, driver='gelsd')
+        alpha_hat = sol.solution.squeeze(1).clamp(min=1e-3)
+        residual = torch.norm(Phi @ alpha_hat.unsqueeze(1) - p_vec).item()
+        
+        soln_dict["alphas"] = [
+            alpha_hat[n].reshape(1).detach().clone() for n in range(self.N)
         ]
-
+        
         theta_true = getattr(self, 'theta_true', None)
         if theta_true is not None and 'alphas' in theta_true:
-            logger.info("  α_est  = [%s]", ', '.join(f'{alpha_hat[k].item():.3f}' for k in range(self.N)))
-            logger.info("  α_true = [%s]", ', '.join(f'{theta_true["alphas"][k].item():.3f}' for k in range(self.N)))
+            est_str = ', '.join(f'{alpha_hat[n].item():.3f}' for n in range(self.N))
+            true_str = ', '.join(f'{theta_true["alphas"][n].item():.3f}' for n in range(self.N))
+            logger.info("  α_est  = [%s]", est_str)
+            logger.info("  α_true = [%s]", true_str)
         else:
-            logger.info("  α = %s", [f'{alpha_hat[k].item():.3f}' for k in range(self.N)])
+            logger.info("  α = %s", [f'{alpha_hat[n].item():.3f}' for n in range(self.N)])
         logger.info("  NNLS residual ‖Φα − p_obs‖₂ = %.4e", residual)
 
         return soln_dict
@@ -714,32 +775,34 @@ class GMM_reco:
     # Stage 2 – multi-start joint optimization
     # ==================================================================
 
-    def _stage_multistart_joint(self, soln_dict, warm_start=False):
-        """Multi-start L-BFGS on full projections (Huber loss) to refine α, U, ω.
-
-        Trial 0 uses the omegas from ``soln_dict`` when ``warm_start=True``;
-        subsequent trials draw random omega candidates.
-        """
+    def _stage_multistart_joint(
+        self, 
+        soln_dict: dict[str, list[torch.Tensor]], 
+        warm_start: bool = True,
+    ) -> dict[str, list[torch.Tensor]]:
+        """Multi-start L-BFGS joint optimization to refine α, U_skew, and ω."""
         logger.info("Stage 2: Multi-start joint optimization")
         n_trials = self.n_omega_inits or 5
-        logger.info("Running %d trials", n_trials)
+        logger.info("Running %d optimization trial(s)", n_trials)
 
         initial_alphas = [a.clone().detach() for a in soln_dict['alphas']]
         initial_U_skews = [U.clone().detach() for U in soln_dict['U_skews']]
         omega_min = self.omega_min - 0.01
         omega_max = self.omega_max + 0.01
 
-        all_losses, all_results = [], []
+        # Explicitly lock stage fixed variables (pure state management)
+        self.theta_fixed = {
+            'x0s': [x0.clone().detach() for x0 in soln_dict['x0s']],
+            'v0s': [v0.clone().detach() for v0 in soln_dict['v0s']],
+            'a0s': [a0.clone().detach() for a0 in soln_dict['a0s']],
+        }
 
-        joint_bar = tqdm(
-            range(n_trials),
-            desc='  trials',
-            unit='trial',
-            leave=False,
-        )
+        all_losses, all_results = [], []
+        joint_bar = tqdm(range(n_trials), desc='  Trials', unit='trial', leave=False)
+
         for trial_idx in joint_bar:
             if warm_start and trial_idx == 0:
-                initial_omegas = [omega.clone().detach() for omega in soln_dict['omegas']]
+                initial_omegas = [w.clone().detach() for w in soln_dict['omegas']]
             else:
                 initial_omegas = [
                     torch.tensor(
@@ -752,108 +815,74 @@ class GMM_reco:
             test_dict = {
                 'alphas': [a.clone().requires_grad_(True) for a in initial_alphas],
                 'U_skews': [U.clone().requires_grad_(True) for U in initial_U_skews],
-                'omegas': [omega.requires_grad_(True) for omega in initial_omegas],
-                'x0s': soln_dict['x0s'],
-                'v0s': soln_dict['v0s'],
-                'a0s': soln_dict['a0s'],
-            }
-            self.theta_fixed = {
-                'x0s': [x0.clone() for x0 in soln_dict['x0s']],
-                'v0s': [v0.clone() for v0 in soln_dict['v0s']],
-                'a0s': [a0.clone() for a0 in soln_dict['a0s']],
+                'omegas': [w.requires_grad_(True) for w in initial_omegas],
+                'x0s': self.theta_fixed['x0s'],
+                'v0s': self.theta_fixed['v0s'],
+                'a0s': self.theta_fixed['a0s'],
             }
 
             theta_tensor = self.map_from_dict_to_tensor(test_dict, mode='joint')
+
             res = minimize(
-                self._loss_joint, x0=theta_tensor, method='l-bfgs',
-                tol=1e-10, options={'gtol': 1e-10, 'max_iter': 1000, 'disp': False},
+                self._loss_joint,
+                x0=theta_tensor,
+                method='l-bfgs',
+                tol=1e-10,
+                options={'gtol': 1e-10, 'max_iter': 1000, 'disp': False},
             )
 
-            result_dict = self.construct_soln_dict(res)
+            result_dict = self.construct_soln_dict(res, mode='joint')
             final_loss = res.fun.item()
+
             all_losses.append(final_loss)
             all_results.append(result_dict)
-            joint_bar.set_postfix({'best': f'{min(all_losses):.3e}'})
+            joint_bar.set_postfix({'best_loss': f'{min(all_losses):.3e}'})
 
-            logger.info("  Trial %d/%d: loss = %.6e, ω = %s",
-                        trial_idx + 1, n_trials, final_loss,
-                        [f'{omega.item():.3f}' for omega in result_dict['omegas']])
+            logger.info(
+                "  Trial %d/%d: loss = %.6e | ω = [%s] Hz",
+                trial_idx + 1, n_trials, final_loss,
+                ', '.join(f'{w.item():.3f}' for w in result_dict['omegas']),
+            )
 
-        best_trial_idx = int(np.argmin(all_losses))
-        best_result = all_results[best_trial_idx]
-        best_loss = all_losses[best_trial_idx]
+        best_idx = int(np.argmin(all_losses))
+        best_result = all_results[best_idx]
+        best_loss = all_losses[best_idx]
 
-        soln_dict['alphas'] = [alpha.clone().detach() for alpha in best_result['alphas']]
-        soln_dict['omegas'] = [omega.clone().detach() for omega in best_result['omegas']]
+        soln_dict['alphas'] = [a.clone().detach() for a in best_result['alphas']]
+        soln_dict['omegas'] = [w.clone().detach() for w in best_result['omegas']]
         soln_dict['U_skews'] = [U.clone().detach() for U in best_result['U_skews']]
 
-        logger.info("Multi-start complete — best trial: %d, loss: %.6e",
-                    best_trial_idx + 1, best_loss)
-        logger.info("Best ω: %s", [f'{omega.item():.4f}' for omega in soln_dict['omegas']])
+        logger.info("Multi-start complete — best trial: %d, loss: %.6e", best_idx + 1, best_loss)
+        logger.info("Best ω = [%s] Hz", ', '.join(f'{w.item():.4f}' for w in soln_dict['omegas']))
 
         return soln_dict
 
+    # def _loss_joint(self, theta_tensor: torch.Tensor) -> torch.Tensor:
+    #     """Stage 2 loss: Huber loss between simulated and observed projections."""
+    #     loss_func = nn.HuberLoss(delta=0.3)
+    #     has_v0_fixed = hasattr(self, 'theta_fixed') and 'v0s' in self.theta_fixed
+    #     mode = 'joint' if has_v0_fixed else 'joint_with_v0'
 
-    def _generate_peak_pattern_for_omega(self, alpha, U_skew, omega, x0, v0, a0, times, gaussian_idx):
-        """Generate predicted projection peaks for a single Gaussian at a given omega."""
-        device = self.device
-        sqrt_pi = torch.sqrt(torch.tensor(torch.pi, dtype=torch.float64, device=device))
-        source = self.sources[0]
-        receiver_line = self.receivers[0]
-        peak_values = []
+    #     theta_dict = self.map_from_tensor_to_dict(theta_tensor, mode=mode)
+    #     for key, value in getattr(self, 'theta_fixed', {}).items():
+    #         if key not in theta_dict:
+    #             theta_dict[key] = value
 
-        for t_n in times:
-            mu_t = x0 + v0 * t_n + 0.5 * a0 * t_n ** 2
-            angle = 2 * torch.pi * omega * t_n
-            cos_a, sin_a = torch.cos(angle), torch.sin(angle)
-            R_t = torch.stack([torch.stack([cos_a, -sin_a]), torch.stack([sin_a, cos_a])])
-            U_rot = U_skew @ R_t.T
+    #     sim_projs = self.generate_projections(self.t_observable, theta_dict)
+    #     sim_projs_processed = self.process_projections(sim_projs)
+    #     proj_data_observable = self.proj_data[self.peak_data.observable_indices]
 
-            projections = []
-            for receiver in receiver_line:
-                r_minus_s = receiver - source
-                r_minus_s_hat = r_minus_s / torch.norm(r_minus_s)
-                U_r_hat = U_rot @ r_minus_s_hat
-                U_r = U_rot @ r_minus_s
-                U_mu = U_rot @ (source - mu_t)
+    #     return loss_func(proj_data_observable, sim_projs_processed)
+    
+    # Reusing loss function instance or functional form saves micro-allocations in the loop:    
 
-                norm_term = torch.norm(U_r_hat)
-                quotient = sqrt_pi * alpha / (norm_term + 1e-10)
-                inner_prod_sq = torch.dot(U_r.squeeze(), U_mu) ** 2
-                exp_arg = inner_prod_sq / (torch.norm(U_r) ** 2 + 1e-10) - torch.norm(U_mu) ** 2
-                projections.append(quotient * torch.exp(exp_arg))
-
-            peak_values.append(torch.max(torch.stack(projections)))
-
-        return torch.stack(peak_values)
-
-
-    def initialize_anisotropic_U_skews(self, v0s, eps=1.0):
-        """Initialise U_skew as diag(30, 15) + small upper-triangular noise.
-
-        The 4:1 aspect ratio ensures Gaussians have a detectable rotation
-        signature in the projections.  Noise on the off-diagonal helps the
-        optimizer recover the true off-diagonal shape.
-        """
-        diag_vals = torch.tensor([30.0, 15.0], dtype=torch.float64, device=self.device)
-        U_skews = []
-        for _ in range(self.N):
-            U_k = torch.diag(diag_vals).clone()
-            if eps > 0:
-                rows, cols = torch.triu_indices(self.d, self.d, offset=1, device=self.device)
-                noise = eps * torch.randn(len(rows), dtype=torch.float64, device=self.device)
-                U_k[rows, cols] = U_k[rows, cols] + noise
-            U_skews.append(U_k)
-        return U_skews
-
-    def _loss_joint(self, theta_tensor):
-        """Stage 2 loss: Huber loss between simulated and observed projections."""
-        loss_func = nn.HuberLoss(delta=0.3)
-        has_v0_fixed = 'v0s' in self.theta_fixed
+    def _loss_joint(self, theta_tensor: torch.Tensor) -> torch.Tensor:
+        
+        has_v0_fixed = hasattr(self, 'theta_fixed') and 'v0s' in self.theta_fixed
         mode = 'joint' if has_v0_fixed else 'joint_with_v0'
 
         theta_dict = self.map_from_tensor_to_dict(theta_tensor, mode=mode)
-        for key, value in self.theta_fixed.items():
+        for key, value in getattr(self, 'theta_fixed', {}).items():
             if key not in theta_dict:
                 theta_dict[key] = value
 
@@ -861,79 +890,57 @@ class GMM_reco:
         sim_projs_processed = self.process_projections(sim_projs)
         proj_data_observable = self.proj_data[self.peak_data.observable_indices]
 
-        return loss_func(proj_data_observable, sim_projs_processed)
+        return F.huber_loss(sim_projs_processed, proj_data_observable, delta=0.3)
 
-    def _sup_projection_error(self, result_dict):
-        """Compute ``max_{t,r} |sim(t,r) − obs(t,r)|`` at observable time points."""
-        with torch.no_grad():
-            sim_projs = self.generate_projections(self.t_observable, result_dict)
-            sim_proc = self.process_projections(sim_projs)
-            obs_proc = self.proj_data[self.peak_data.observable_indices]
-            return torch.max(torch.abs(sim_proc - obs_proc)).item()
+    def construct_soln_dict(
+        self, 
+        res, 
+        mode: str | None = None,
+    ) -> dict[str, list[torch.Tensor]]:
+        """Construct a full parameter dictionary from an optimization result."""
+        theta_tensor = res.x if isinstance(res.x, torch.Tensor) else torch.tensor(res.x, device=self.device)
 
+        if mode is None:
+            tensor_size = theta_tensor.numel()
+            params_per_gaussian = tensor_size // self.N if self.N > 0 else tensor_size
+            has_v0_fixed = hasattr(self, 'theta_fixed') and 'v0s' in self.theta_fixed
 
-    def isotropic_derivative_function(self, v0, *args):
-        """Isotropic projection derivative used as the root-finding objective."""
-        t_n, r, s, x0, a0 = args
-        r1, r2 = r[0], r[1]
-        s1, s2 = s[0], s[1]
-        d1, d2 = r1 - s1, r2 - s2
-        norm_n_sq = d1 ** 2 + d2 ** 2
-        c_n = s - x0 - v0 * t_n - 0.5 * a0 * t_n ** 2
-        h_k = d1 * c_n[0] - s2 * c_n[1]
-        R_k_l = 2 * norm_n_sq * c_n[1] * (c_n[1] * r2 + h_k)
-        R_k_r = -2 * d2 * (c_n[1] * r2 + h_k) ** 2
-        return (R_k_l + R_k_r) / norm_n_sq ** 2
+            if params_per_gaussian == 2:
+                mode = 'trajectory'
+            elif params_per_gaussian >= 4 and has_v0_fixed:
+                mode = 'joint'
+            else:
+                mode = 'joint_with_v0'
 
-    def isotropic_derivative_function_over_all_times(self, v0, *args):
-        """Sum of |isotropic derivatives| across all time points."""
-        t, r, s, x0, a0 = args
-        R_all = torch.zeros(1, dtype=torch.float64, device=self.device)
-        for n, t_n in enumerate(t):
-            R_all += torch.abs(self.isotropic_derivative_function(v0, t_n, r[n], s, x0, a0))
-        return R_all
+        soln_dict = self.map_from_tensor_to_dict(theta_tensor, mode=mode)
 
+        for key, value in getattr(self, 'theta_fixed', {}).items():
+            if key not in soln_dict:
+                soln_dict[key] = [v.clone() for v in value]
+
+        return soln_dict
 
     # ==================================================================
-    # Parameter serialization (dict ↔ flat tensor for L-BFGS)
+    # Parameter Serialization (Pure Functions Without Side-Effects)
     # ==================================================================
 
-    def map_from_dict_to_tensor(self, theta_dict, mode='trajectory'):
-        """Pack parameters into a flat tensor for L-BFGS.
-
-        Parameters
-        ----------
-        theta_dict : dict
-        mode : {'trajectory', 'joint', 'joint_with_v0'}
-
-        Returns
-        -------
-        torch.Tensor
-        """
+    def map_from_dict_to_tensor(
+        self, 
+        theta_dict: dict[str, list[torch.Tensor]], 
+        mode: str = 'trajectory',
+    ) -> torch.Tensor:
+        """Pack parameters into a flat tensor for L-BFGS (pure function)."""
         d, N = self.d, self.N
         tensor_rows = []
 
         if mode == "trajectory":
-            self.theta_fixed = {
-                'alphas': [alpha.clone() for alpha in theta_dict['alphas']],
-                'U_skews': [U.clone() for U in theta_dict['U_skews']],
-                'omegas': [omega.clone() for omega in theta_dict['omegas']],
-                'x0s': [x0.clone() for x0 in theta_dict['x0s']],
-                'a0s': [a0.clone() for a0 in theta_dict['a0s']],
-            }
             for k in range(N):
                 v0_n = theta_dict['v0s'][k]
                 v0_k_0 = torch.log(torch.abs(v0_n[0]) + 1e-8)
                 tensor_rows.append(torch.stack([v0_k_0, v0_n[1]]))
 
         elif mode in ("joint", "joint_with_v0"):
-            if not hasattr(self, 'theta_fixed') or self.theta_fixed is None:
-                self.theta_fixed = {
-                    'x0s': [x0.clone() for x0 in theta_dict['x0s']],
-                    'a0s': [a0.clone() for a0 in theta_dict['a0s']],
-                }
-                if mode == "joint":
-                    self.theta_fixed['v0s'] = [v0.clone() for v0 in theta_dict['v0s']]
+            fixed_keys = list(getattr(self, 'theta_fixed', {}).keys())
 
             for k in range(N):
                 row_parts = []
@@ -944,74 +951,73 @@ class GMM_reco:
                     row_parts.append(v0_n[1].reshape(-1))
 
                 # Alpha – log transform
-                row_parts.append(torch.log(theta_dict["alphas"][k].clone()).reshape(-1))
+                row_parts.append(torch.log(theta_dict["alphas"][k] + 1e-8).reshape(-1))
 
-                # U_skew – log-transform diagonal, keep upper triangle
-                U_skew_copy = theta_dict["U_skews"][k].clone()
-                EPS = 1e-8
-                diag_logged = torch.log(torch.clamp(torch.diagonal(U_skew_copy), min=EPS))
-                U_no_diag = U_skew_copy - torch.diag(torch.diagonal(U_skew_copy))
-                U_with_log_diag = U_no_diag + torch.diag(diag_logged)
-                triu_idx = torch.triu_indices(d, d, device=U_skew_copy.device)
-                row_parts.append(U_with_log_diag[triu_idx[0], triu_idx[1]].reshape(-1))
+                # U_skew – log-transform diagonal, extract upper triangle
+                U_skew = theta_dict["U_skews"][k].clone()
+                diag_idx = torch.arange(d, device=U_skew.device)
+                U_skew[diag_idx, diag_idx] = torch.log(torch.clamp(U_skew[diag_idx, diag_idx], min=1e-8))
 
-                # Omega – logit reparametrisation to keep ω ∈ (ω_min, ω_max)
-                theta_fixed_keys = list(getattr(self, 'theta_fixed', {}).keys())
-                if 'omegas' in theta_dict and 'omegas' not in theta_fixed_keys:
-                    omega_k = theta_dict["omegas"][k].clone()
+                triu_r, triu_c = torch.triu_indices(d, d, device=U_skew.device)
+                row_parts.append(U_skew[triu_r, triu_c].reshape(-1))
+
+                # Omega – logit reparameterization to enforce ω ∈ (omega_min, omega_max)
+                if 'omegas' in theta_dict and 'omegas' not in fixed_keys:
+                    omega_k = theta_dict["omegas"][k]
                     omega_range = self.omega_max - self.omega_min
-                    p = torch.clamp((omega_k - self.omega_min) / omega_range, 1e-6, 1.0 - 1e-6)
-                    row_parts.append(torch.log(p / (1.0 - p)).reshape(-1))
+                    norm_omega = torch.clamp((omega_k - self.omega_min) / omega_range, 1e-6, 1.0 - 1e-6)
+                    row_parts.append(torch.logit(norm_omega).reshape(-1))
 
                 tensor_rows.append(torch.cat(row_parts))
 
         return tensor_rows[0] if len(tensor_rows) == 1 else torch.stack(tensor_rows)
 
-    def map_from_tensor_to_dict(self, theta_tensor, mode='trajectory'):
-        """Unpack a flat tensor back to a parameter dict (inverse of the above)."""
+    def map_from_tensor_to_dict(
+        self, 
+        theta_tensor: torch.Tensor, 
+        mode: str = 'trajectory',
+    ) -> dict[str, list[torch.Tensor]]:
+        """Unpack a flat tensor back to a parameter dictionary."""
         d, N = self.d, self.N
         theta_dict = {}
 
         if mode == "trajectory":
             v0s = []
-            if N == 1:
-                theta_tensor = theta_tensor.squeeze(0)
-                v0s.append(torch.stack([torch.exp(theta_tensor[0]), theta_tensor[1]]))
-            else:
-                for k in range(N):
-                    v0s.append(torch.stack([torch.exp(theta_tensor[k, 0]), theta_tensor[k, 1]]))
+            rows = [theta_tensor[n] for n in range(N)] if (N > 1 and theta_tensor.dim() > 1) else [theta_tensor]
+            for row in rows:
+                v0s.append(torch.stack([torch.exp(row[0]), row[1]]))
             theta_dict['v0s'] = v0s
 
         elif mode in ("joint", "joint_with_v0"):
             alphas, U_skews, omegas, v0s = [], [], [], []
             n_U_params = d * (d + 1) // 2
-            rows = [theta_tensor[k] for k in range(N)] if N > 1 else [theta_tensor]
+            rows = [theta_tensor[n] for n in range(N)] if (N > 1 and theta_tensor.dim() > 1) else [theta_tensor]
 
-            for row_k in rows:
+            for row_n in rows:
                 idx = 0
 
                 if mode == "joint_with_v0":
-                    v0s.append(torch.stack([torch.exp(row_k[idx]), row_k[idx + 1]]))
+                    v0s.append(torch.stack([torch.exp(row_n[idx]), row_n[idx + 1]]))
                     idx += 2
 
                 # Alpha
-                alphas.append(torch.exp(torch.clamp(row_k[idx], -5, 5)).unsqueeze(0))
+                alphas.append(torch.exp(torch.clamp(row_n[idx], -5.0, 5.0)).unsqueeze(0))
                 idx += 1
 
                 # U_skew
-                U_skew_vals = row_k[idx: idx + n_U_params]
+                U_vals = row_n[idx: idx + n_U_params]
                 U_skew = torch.zeros((d, d), dtype=theta_tensor.dtype, device=theta_tensor.device)
-                triu_indices = torch.triu_indices(d, d)
-                U_skew[triu_indices[0], triu_indices[1]] = U_skew_vals
-                diag_mask = torch.eye(d, dtype=torch.bool, device=theta_tensor.device)
-                U_skew_final = U_skew.clone()
-                U_skew_final[diag_mask] = torch.exp(torch.clamp(U_skew[diag_mask], -4, 4))
-                U_skews.append(U_skew_final)
+                triu_r, triu_c = torch.triu_indices(d, d, device=theta_tensor.device)
+                U_skew[triu_r, triu_c] = U_vals
+
+                diag_idx = torch.arange(d, device=theta_tensor.device)
+                U_skew[diag_idx, diag_idx] = torch.exp(torch.clamp(U_skew[diag_idx, diag_idx], -4.0, 4.0))
+                U_skews.append(U_skew)
                 idx += n_U_params
 
-                # Omega – inverse sigmoid
-                if len(row_k) > idx:
-                    z_omega = row_k[idx]
+                # Omega
+                if len(row_n) > idx:
+                    z_omega = row_n[idx]
                     omega = self.omega_min + (self.omega_max - self.omega_min) * torch.sigmoid(z_omega)
                     omegas.append(omega.unsqueeze(0) if omega.dim() == 0 else omega)
 
@@ -1023,33 +1029,6 @@ class GMM_reco:
                 theta_dict['v0s'] = v0s
 
         return theta_dict
-
-    def construct_soln_dict(self, res):
-        """Build a full parameter dict from an optimization result."""
-        theta_tensor = res.x
-        tensor_size = (
-            theta_tensor.numel() if theta_tensor.dim() == 1
-            else theta_tensor.shape[0] * theta_tensor.shape[1]
-        )
-        params_per_gaussian = tensor_size // self.N if self.N > 0 else tensor_size
-        has_v0_fixed = hasattr(self, 'theta_fixed') and 'v0s' in self.theta_fixed
-
-        if params_per_gaussian == 2:
-            mode = 'trajectory'
-        elif params_per_gaussian == 4 and hasattr(self, 'theta_fixed') and 'omegas' in self.theta_fixed:
-            mode = 'joint'
-        elif params_per_gaussian == 7 or (params_per_gaussian >= 5 and not has_v0_fixed):
-            mode = 'joint_with_v0'
-        elif params_per_gaussian >= 4:
-            mode = 'joint'
-        else:
-            raise ValueError(f"Cannot determine mode: {params_per_gaussian} params per Gaussian")
-
-        soln_dict = self.map_from_tensor_to_dict(theta_tensor, mode=mode)
-        for key, value in self.theta_fixed.items():
-            if key not in soln_dict:
-                soln_dict[key] = value.copy()
-        return soln_dict
 
 
     # ==================================================================
@@ -1103,3 +1082,377 @@ class GMM_reco:
         if isinstance(obj, dict):
             return {k: self._to_device(v) for k, v in obj.items()}
         return obj
+    
+    
+    
+    # ======================================================================
+# Parameter Serialization Helpers (Extractable to src/serializers.py)
+# ======================================================================
+
+# def map_from_dict_to_tensor(
+#     theta_dict: dict[str, list[torch.Tensor]], 
+#     d: int, 
+#     N: int, 
+#     omega_min: float, 
+#     omega_max: float, 
+#     mode: str = 'trajectory',
+#     theta_fixed: dict[str, list[torch.Tensor]] | None = None,
+# ) -> torch.Tensor:
+#     """Pack parameters into a flat tensor for L-BFGS optimization.
+
+#     Modes:
+#       - 'trajectory': Optimization over initial velocities v0.
+#       - 'joint': Optimization over α, U_skew, and ω (v0 fixed).
+#       - 'joint_with_v0': Optimization over α, U_skew, ω, and v0.
+#     """
+#     tensor_rows = []
+#     fixed_keys = list(theta_fixed.keys()) if theta_fixed is not None else []
+
+#     for k in range(N):
+#         row_parts = []
+
+#         if mode in ("trajectory", "joint_with_v0"):
+#             v0_n = theta_dict['v0s'][k]
+#             v0_k_0 = torch.log(torch.abs(v0_n[0]) + 1e-8)
+#             row_parts.extend([v0_k_0.reshape(-1), v0_n[1].reshape(-1)])
+
+#         if mode in ("joint", "joint_with_v0"):
+#             # Alpha – log transform for non-negativity constraint
+#             row_parts.append(torch.log(theta_dict["alphas"][k] + 1e-8).reshape(-1))
+
+#             # U_skew – log-transform diagonal, extract upper triangle
+#             U_skew = theta_dict["U_skews"][k].clone()
+#             diag_idx = torch.arange(d, device=U_skew.device)
+#             U_skew[diag_idx, diag_idx] = torch.log(torch.clamp(U_skew[diag_idx, diag_idx], min=1e-8))
+            
+#             triu_r, triu_c = torch.triu_indices(d, d, device=U_skew.device)
+#             row_parts.append(U_skew[triu_r, triu_c].reshape(-1))
+
+#             # Omega – logit reparameterization to enforce ω ∈ (omega_min, omega_max)
+#             if 'omegas' in theta_dict and 'omegas' not in fixed_keys:
+#                 omega_k = theta_dict["omegas"][k]
+#                 omega_range = omega_max - omega_min
+#                 norm_omega = torch.clamp((omega_k - omega_min) / omega_range, 1e-6, 1.0 - 1e-6)
+#                 row_parts.append(torch.logit(norm_omega).reshape(-1))
+
+#         tensor_rows.append(torch.cat(row_parts))
+
+#     return tensor_rows[0] if len(tensor_rows) == 1 else torch.stack(tensor_rows)
+
+
+# def map_from_tensor_to_dict(
+#     theta_tensor: torch.Tensor, 
+#     d: int, 
+#     N: int, 
+#     omega_min: float, 
+#     omega_max: float, 
+#     mode: str = 'trajectory',
+# ) -> dict[str, list[torch.Tensor]]:
+#     """Unpack a flat parameter tensor back to a parameter dictionary."""
+#     theta_dict: dict[str, list[torch.Tensor]] = {}
+#     alphas, U_skews, omegas, v0s = [], [], [], []
+#     n_U_params = d * (d + 1) // 2
+    
+#     rows = [theta_tensor[k] for k in range(N)] if (N > 1 and theta_tensor.dim() > 1) else [theta_tensor]
+
+#     for row_k in rows:
+#         idx = 0
+
+#         if mode in ("trajectory", "joint_with_v0"):
+#             v0s.append(torch.stack([torch.exp(row_k[idx]), row_k[idx + 1]]))
+#             idx += 2
+
+#         if mode in ("joint", "joint_with_v0"):
+#             # Alpha
+#             alphas.append(torch.exp(torch.clamp(row_k[idx], -5.0, 5.0)).unsqueeze(0))
+#             idx += 1
+
+#             # U_skew
+#             U_vals = row_k[idx: idx + n_U_params]
+#             U_skew = torch.zeros((d, d), dtype=theta_tensor.dtype, device=theta_tensor.device)
+#             triu_r, triu_c = torch.triu_indices(d, d, device=theta_tensor.device)
+#             U_skew[triu_r, triu_c] = U_vals
+            
+#             diag_idx = torch.arange(d, device=theta_tensor.device)
+#             U_skew[diag_idx, diag_idx] = torch.exp(torch.clamp(U_skew[diag_idx, diag_idx], -4.0, 4.0))
+#             U_skews.append(U_skew)
+#             idx += n_U_params
+
+#             # Omega
+#             if len(row_k) > idx:
+#                 z_omega = row_k[idx]
+#                 omega = omega_min + (omega_max - omega_min) * torch.sigmoid(z_omega)
+#                 omegas.append(omega.unsqueeze(0) if omega.dim() == 0 else omega)
+
+#     if alphas:
+#         theta_dict['alphas'] = alphas
+#     if U_skews:
+#         theta_dict['U_skews'] = U_skews
+#     if omegas:
+#         theta_dict['omegas'] = omegas
+#     if v0s:
+#         theta_dict['v0s'] = v0s
+
+    # return theta_dict
+    
+    
+        # def _stage_multistart_joint(
+    #     self, 
+    #     soln_dict: dict[str, list[torch.Tensor]], 
+    #     warm_start: bool = True,
+    # ) -> dict[str, list[torch.Tensor]]:
+    #     """Multi-start L-BFGS joint optimization to refine α, U_skew, and ω.
+
+    #     Trial 0 uses initial omegas from ``soln_dict`` when ``warm_start=True``;
+    #     subsequent trials draw random omega candidates uniformly in [omega_min, omega_max].
+    #     """
+    #     logger.info("Stage 2: Multi-start joint optimization")
+    #     n_trials = self.n_omega_inits or 5
+    #     logger.info("Running %d optimization trial(s)", n_trials)
+
+    #     initial_alphas = [a.clone().detach() for a in soln_dict['alphas']]
+    #     initial_U_skews = [U.clone().detach() for U in soln_dict['U_skews']]
+    #     omega_min = self.omega_min - 0.01
+    #     omega_max = self.omega_max + 0.01
+
+    #     all_losses, all_results = [], []
+
+    #     joint_bar = tqdm(range(n_trials), desc='  Trials', unit='trial', leave=False)
+    #     for trial_idx in joint_bar:
+    #         if warm_start and trial_idx == 0:
+    #             initial_omegas = [w.clone().detach() for w in soln_dict['omegas']]
+    #         else:
+    #             initial_omegas = [
+    #                 torch.tensor(
+    #                     [np.random.uniform(omega_min, omega_max)],
+    #                     dtype=torch.float64, device=self.device,
+    #                 )
+    #                 for _ in range(self.N)
+    #             ]
+
+    #         test_dict = {
+    #             'alphas': [a.clone().requires_grad_(True) for a in initial_alphas],
+    #             'U_skews': [U.clone().requires_grad_(True) for U in initial_U_skews],
+    #             'omegas': [w.requires_grad_(True) for w in initial_omegas],
+    #             'x0s': soln_dict['x0s'],
+    #             'v0s': soln_dict['v0s'],
+    #             'a0s': soln_dict['a0s'],
+    #         }
+
+    #         self.theta_fixed = {
+    #             'x0s': [x0.clone() for x0 in soln_dict['x0s']],
+    #             'v0s': [v0.clone() for v0 in soln_dict['v0s']],
+    #             'a0s': [a0.clone() for a0 in soln_dict['a0s']],
+    #         }
+
+    #         theta_tensor = self.map_from_dict_to_tensor(test_dict, mode='joint')
+
+    #         res = minimize(
+    #             self._loss_joint,
+    #             x0=theta_tensor,
+    #             method='l-bfgs',
+    #             tol=1e-10,
+    #             options={'gtol': 1e-10, 'max_iter': 1000, 'disp': False},
+    #         )
+
+    #         result_dict = self.construct_soln_dict(res, mode='joint')
+    #         final_loss = res.fun.item()
+            
+    #         all_losses.append(final_loss)
+    #         all_results.append(result_dict)
+    #         joint_bar.set_postfix({'best_loss': f'{min(all_losses):.3e}'})
+
+    #         logger.info(
+    #             "  Trial %d/%d: loss = %.6e | ω = [%s] Hz",
+    #             trial_idx + 1, n_trials, final_loss,
+    #             ', '.join(f'{w.item():.3f}' for w in result_dict['omegas']),
+    #         )
+
+    #     best_idx = int(np.argmin(all_losses))
+    #     best_result = all_results[best_idx]
+    #     best_loss = all_losses[best_idx]
+
+    #     soln_dict['alphas'] = [a.clone().detach() for a in best_result['alphas']]
+    #     soln_dict['omegas'] = [w.clone().detach() for w in best_result['omegas']]
+    #     soln_dict['U_skews'] = [U.clone().detach() for U in best_result['U_skews']]
+
+    #     logger.info("Multi-start complete — best trial: %d, loss: %.6e", best_idx + 1, best_loss)
+    #     logger.info("Best ω = [%s] Hz", ', '.join(f'{w.item():.4f}' for w in soln_dict['omegas']))
+
+    #     return soln_dict
+
+    # def _loss_joint(self, theta_tensor: torch.Tensor) -> torch.Tensor:
+    #     """Stage 2 loss: Huber loss between simulated and observed projections."""
+    #     loss_func = nn.HuberLoss(delta=0.3)
+    #     has_v0_fixed = hasattr(self, 'theta_fixed') and 'v0s' in self.theta_fixed
+    #     mode = 'joint' if has_v0_fixed else 'joint_with_v0'
+
+    #     theta_dict = self.map_from_tensor_to_dict(theta_tensor, mode=mode)
+    #     for key, value in getattr(self, 'theta_fixed', {}).items():
+    #         if key not in theta_dict:
+    #             theta_dict[key] = value
+
+    #     sim_projs = self.generate_projections(self.t_observable, theta_dict)
+    #     sim_projs_processed = self.process_projections(sim_projs)
+    #     proj_data_observable = self.proj_data[self.peak_data.observable_indices]
+
+    #     return loss_func(proj_data_observable, sim_projs_processed)
+
+    # def construct_soln_dict(
+    #     self, 
+    #     res, 
+    #     mode: str | None = None,
+    # ) -> dict[str, list[torch.Tensor]]:
+    #     """Construct a full parameter dictionary from an optimization result."""
+    #     theta_tensor = res.x if isinstance(res.x, torch.Tensor) else torch.tensor(res.x, device=self.device)
+
+    #     if mode is None:
+    #         tensor_size = theta_tensor.numel()
+    #         params_per_gaussian = tensor_size // self.N if self.N > 0 else tensor_size
+    #         has_v0_fixed = hasattr(self, 'theta_fixed') and 'v0s' in self.theta_fixed
+
+    #         if params_per_gaussian == 2:
+    #             mode = 'trajectory'
+    #         elif params_per_gaussian >= 4 and has_v0_fixed:
+    #             mode = 'joint'
+    #         else:
+    #             mode = 'joint_with_v0'
+
+    #     soln_dict = self.map_from_tensor_to_dict(theta_tensor, mode=mode)
+        
+    #     for key, value in getattr(self, 'theta_fixed', {}).items():
+    #         if key not in soln_dict:
+    #             soln_dict[key] = [v.clone() for v in value]
+
+    #     return soln_dict
+
+
+    # # ==================================================================
+    # # Parameter serialization (dict ↔ flat tensor for L-BFGS)
+    # # ==================================================================
+
+    # def map_from_dict_to_tensor(self, theta_dict, mode='trajectory'):
+    #     """Pack parameters into a flat tensor for L-BFGS.
+
+    #     Parameters
+    #     ----------
+    #     theta_dict : dict
+    #     mode : {'trajectory', 'joint', 'joint_with_v0'}
+
+    #     Returns
+    #     -------
+    #     torch.Tensor
+    #     """
+    #     d, N = self.d, self.N
+    #     tensor_rows = []
+
+    #     if mode == "trajectory":
+    #         self.theta_fixed = {
+    #             'alphas': [alpha.clone() for alpha in theta_dict['alphas']],
+    #             'U_skews': [U.clone() for U in theta_dict['U_skews']],
+    #             'omegas': [omega.clone() for omega in theta_dict['omegas']],
+    #             'x0s': [x0.clone() for x0 in theta_dict['x0s']],
+    #             'a0s': [a0.clone() for a0 in theta_dict['a0s']],
+    #         }
+    #         for k in range(N):
+    #             v0_n = theta_dict['v0s'][k]
+    #             v0_k_0 = torch.log(torch.abs(v0_n[0]) + 1e-8)
+    #             tensor_rows.append(torch.stack([v0_k_0, v0_n[1]]))
+
+    #     elif mode in ("joint", "joint_with_v0"):
+    #         if not hasattr(self, 'theta_fixed') or self.theta_fixed is None:
+    #             self.theta_fixed = {
+    #                 'x0s': [x0.clone() for x0 in theta_dict['x0s']],
+    #                 'a0s': [a0.clone() for a0 in theta_dict['a0s']],
+    #             }
+    #             if mode == "joint":
+    #                 self.theta_fixed['v0s'] = [v0.clone() for v0 in theta_dict['v0s']]
+
+    #         for k in range(N):
+    #             row_parts = []
+
+    #             if mode == "joint_with_v0":
+    #                 v0_n = theta_dict['v0s'][k]
+    #                 row_parts.append(torch.log(torch.abs(v0_n[0]) + 1e-8).reshape(-1))
+    #                 row_parts.append(v0_n[1].reshape(-1))
+
+    #             # Alpha – log transform
+    #             row_parts.append(torch.log(theta_dict["alphas"][k].clone()).reshape(-1))
+
+    #             # U_skew – log-transform diagonal, keep upper triangle
+    #             U_skew_copy = theta_dict["U_skews"][k].clone()
+    #             EPS = 1e-8
+    #             diag_logged = torch.log(torch.clamp(torch.diagonal(U_skew_copy), min=EPS))
+    #             U_no_diag = U_skew_copy - torch.diag(torch.diagonal(U_skew_copy))
+    #             U_with_log_diag = U_no_diag + torch.diag(diag_logged)
+    #             triu_idx = torch.triu_indices(d, d, device=U_skew_copy.device)
+    #             row_parts.append(U_with_log_diag[triu_idx[0], triu_idx[1]].reshape(-1))
+
+    #             # Omega – logit reparametrisation to keep ω ∈ (ω_min, ω_max)
+    #             theta_fixed_keys = list(getattr(self, 'theta_fixed', {}).keys())
+    #             if 'omegas' in theta_dict and 'omegas' not in theta_fixed_keys:
+    #                 omega_k = theta_dict["omegas"][k].clone()
+    #                 omega_range = self.omega_max - self.omega_min
+    #                 p = torch.clamp((omega_k - self.omega_min) / omega_range, 1e-6, 1.0 - 1e-6)
+    #                 row_parts.append(torch.log(p / (1.0 - p)).reshape(-1))
+
+    #             tensor_rows.append(torch.cat(row_parts))
+
+    #     return tensor_rows[0] if len(tensor_rows) == 1 else torch.stack(tensor_rows)
+
+    # def map_from_tensor_to_dict(self, theta_tensor, mode='trajectory'):
+    #     """Unpack a flat tensor back to a parameter dict (inverse of the above)."""
+    #     d, N = self.d, self.N
+    #     theta_dict = {}
+
+    #     if mode == "trajectory":
+    #         v0s = []
+    #         if N == 1:
+    #             theta_tensor = theta_tensor.squeeze(0)
+    #             v0s.append(torch.stack([torch.exp(theta_tensor[0]), theta_tensor[1]]))
+    #         else:
+    #             for n in range(N):
+    #                 v0s.append(torch.stack([torch.exp(theta_tensor[n, 0]), theta_tensor[n, 1]]))
+    #         theta_dict['v0s'] = v0s
+
+    #     elif mode in ("joint", "joint_with_v0"):
+    #         alphas, U_skews, omegas, v0s = [], [], [], []
+    #         n_U_params = d * (d + 1) // 2
+    #         rows = [theta_tensor[n] for n in range(N)] if N > 1 else [theta_tensor]
+
+    #         for row_n in rows:
+    #             idx = 0
+
+    #             if mode == "joint_with_v0":
+    #                 v0s.append(torch.stack([torch.exp(row_n[idx]), row_n[idx + 1]]))
+    #                 idx += 2
+
+    #             # Alpha
+    #             alphas.append(torch.exp(torch.clamp(row_n[idx], -5, 5)).unsqueeze(0))
+    #             idx += 1
+
+    #             # U_skew
+    #             U_skew_vals = row_n[idx: idx + n_U_params]
+    #             U_skew = torch.zeros((d, d), dtype=theta_tensor.dtype, device=theta_tensor.device)
+    #             triu_indices = torch.triu_indices(d, d)
+    #             U_skew[triu_indices[0], triu_indices[1]] = U_skew_vals
+    #             diag_mask = torch.eye(d, dtype=torch.bool, device=theta_tensor.device)
+    #             U_skew_final = U_skew.clone()
+    #             U_skew_final[diag_mask] = torch.exp(torch.clamp(U_skew[diag_mask], -4, 4))
+    #             U_skews.append(U_skew_final)
+    #             idx += n_U_params
+
+    #             # Omega – inverse sigmoid
+    #             if len(row_n) > idx:
+    #                 z_omega = row_n[idx]
+    #                 omega = self.omega_min + (self.omega_max - self.omega_min) * torch.sigmoid(z_omega)
+    #                 omegas.append(omega.unsqueeze(0) if omega.dim() == 0 else omega)
+
+    #         theta_dict['alphas'] = alphas
+    #         theta_dict['U_skews'] = U_skews
+    #         if omegas:
+    #             theta_dict['omegas'] = omegas
+    #         if mode == "joint_with_v0" and v0s:
+    #             theta_dict['v0s'] = v0s
+
+    #     return theta_dict

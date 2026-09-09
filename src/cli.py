@@ -41,12 +41,15 @@ def main(argv=None):
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
     
+    
     # --- run (Simulate -> Reconstruct -> Analyze)
+    # Run as python -m src.cli run --config configs/experiment.yaml
     run_parser = subparsers.add_parser(
         "run",
         help="Run full end-to-end experiment (Simulate -> Reconstruct -> Analyze)",
     )
     _add_common_args(run_parser)
+    
     
     # --- simulate --------------------------------------------------------
     sim_parser = subparsers.add_parser(
@@ -57,6 +60,7 @@ def main(argv=None):
     sim_parser.add_argument("--seed", type=int, default=None, help="Override seed",
     )
     
+    
     # --- reconstruct -----------------------------------------------------
     reco_parser = subparsers.add_parser(
         "reconstruct",
@@ -65,6 +69,7 @@ def main(argv=None):
     _add_common_args(reco_parser)
     reco_parser.add_argument("--data", type=str, default=None, help="Override projection data path")
     reco_parser.add_argument("--skip-analysis", action="store_true", help="Skip post-reconstruction analysis")
+
 
     args = parser.parse_args(argv)
 

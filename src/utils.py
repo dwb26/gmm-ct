@@ -115,8 +115,10 @@ def generate_true_param(
     U_ns = []
     for _ in range(N):
         for _attempt in range(500):
-            mean_diag_val = 7.5
-            U_n_diag = torch.rand(size=(d,), dtype=torch.float64, device=device) * 18.0 + mean_diag_val
+            # mean_diag_val = 7.5
+            mean_diag_val = 15.5
+            # U_n_diag = torch.rand(size=(d,), dtype=torch.float64, device=device) * 18.0 + mean_diag_val
+            U_n_diag = torch.rand(size=(d,), dtype=torch.float64, device=device) * 30.0 + mean_diag_val
 
             # Test for the anisotropy condition before constructing the full matrix. If fails, restart
             if (U_n_diag.max() / U_n_diag.min()).item() < min_diag_ratio:
@@ -170,8 +172,8 @@ def generate_true_param(
     else:
         v0s = [
             initial_velocity.to(torch.float64) + (
-                torch.rand(d, dtype=torch.float64, device=device) - 0.5
-            ) * 4.5
+                torch.rand(d, dtype=torch.float64, device=device)
+            ) * 2.5
             for _ in range(N)
         ]
 
@@ -354,3 +356,6 @@ def NewtonRaphsonLBFGS(
             logger.warning("L-BFGS root-finding failed: %s", e)
 
     return x0
+
+
+

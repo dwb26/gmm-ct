@@ -1132,11 +1132,11 @@ def animate_gmm_with_joint_projection(
 
 
 def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est, 
-                                     t, K, d, output_dir, filename=None, fps=10,
+                                     t, K, d, output_dir, filename=None,
                                      show_trajectories=True,
                                      title='', 
                                      title_fontsize=20, label_fontsize=18, tick_fontsize=16,
-                                     upsample=8):
+                                     upsample=2):
     """
     Create an animation showing temporal evolution of ground truth and estimated GMMs.
     
@@ -1338,7 +1338,8 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         return left_artists + center_artists + right_artists
     
     # interval: real-time 1:1 mapping with physics time
-    interval_ms = (t_end - t_start) * 1000 / n_frames
+    # interval_ms = (t_end - t_start) * 1000 / n_frames
+    interval_ms = (t_end - t_start) * 50 / n_frames
     anim = FuncAnimation(fig, update, init_func=init, frames=n_frames,
                         interval=interval_ms, blit=False, repeat=True)
     
