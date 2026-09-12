@@ -62,6 +62,7 @@ plots/
 test_output/
 checkpoints/
 logs/
+src/tomography_solver/
 
 # Exception: keep README files in data/
 !data/README.md

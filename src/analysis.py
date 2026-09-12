@@ -20,15 +20,15 @@ def run_analysis(
 ) -> None:
     """Load unified results bundle and execute complete post-reconstruction analysis."""
     exp_dir = Path(exp_dir)
-    results_path = exp_dir
+    logger.info(f"Running analysis on {exp_dir}...")
     
-    if not results_path.exists():
-        raise FileNotFoundError(f"Cannot run analysis: missing {results_path}")
+    if not exp_dir.exists():
+        raise FileNotFoundError(f"Cannot run analysis: missing {exp_dir}")
     
-    logger.info(f"Loading from {results_path}")
-    gt_data = torch.load(results_path / "ground_truth.pt" , map_location="cpu", weights_only=False)
-    est_data = torch.load(results_path / "reconstruction.pt" , map_location="cpu", weights_only=False)
-    proj_data = torch.load(results_path / "projections.pt" , map_location="cpu", weights_only=False)
+    logger.info(f"Loading from {exp_dir}")
+    gt_data = torch.load(exp_dir / "ground_truth.pt" , map_location="cpu", weights_only=False)
+    est_data = torch.load(exp_dir / "reconstruction.pt" , map_location="cpu", weights_only=False)
+    proj_data = torch.load(exp_dir / "projections.pt" , map_location="cpu", weights_only=False)
     
     geometry_cfg = cfg.geometry
     physics_cfg = cfg.physics
@@ -104,7 +104,7 @@ def analyze_results(
             omega_min=omega_min, 
             omega_max=omega_max, 
             device=device,
-            output_dir=exp_dir,
+            exp_dir=exp_dir,
         )
 
         errors_init = _compute_parameter_errors(theta_true, theta_init, N) if theta_init else {}

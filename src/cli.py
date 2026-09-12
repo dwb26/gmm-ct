@@ -5,6 +5,12 @@ import logging
 import sys
 from pathlib import Path
 
+from .config import load_experiment_config
+from .simulate import run_simulation
+from .reconstruct import run_reconstruction
+from .analysis import run_analysis
+from .tomography_solver.solver_pipeline import GMMTomographySolver
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,7 +49,6 @@ def main(argv=None):
     
     
     # --- run (Simulate -> Reconstruct -> Analyze)
-    # Run as python -m src.cli run --config configs/experiment.yaml
     run_parser = subparsers.add_parser(
         "run",
         help="Run full end-to-end experiment (Simulate -> Reconstruct -> Analyze)",
@@ -67,10 +72,19 @@ def main(argv=None):
         help="Run reconstruction on projection data",
     )
     _add_common_args(reco_parser)
-    reco_parser.add_argument("--data", type=str, default=None, help="Override projection data path")
-    reco_parser.add_argument("--skip-analysis", action="store_true", help="Skip post-reconstruction analysis")
+    reco_parser.add_argument("--exp-dir", type=str, default=None, help="Override projection data path")
 
 
+    # --- analysis -----------------------------------------------------
+    ana_parser = subparsers.add_parser(
+        "analysis",
+        help="Run reconstruction on projection data",
+    )
+    _add_common_args(ana_parser)
+    ana_parser.add_argument("--exp-dir", type=Path, required=True)
+
+
+    # Runner calls
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -83,47 +97,86 @@ def main(argv=None):
         return _run_simulate_cmd(args)
     elif args.command == "reconstruct":
         return _run_reconstruct_cmd(args)
+    elif args.command == "analysis":
+        return _run_analysis_cmd(args)
     else:
         parser.print_help()
         return 1
 
-def _run_experiment_cmd(args) -> int:
-    from .config import load_experiment_config
-    from .experiment import run_experiment
+
+# --- Task Runners -----------------------------------------------------
+def _run_experiment_cmd(args) -> Path:
+    """Run the full simulate -> reconstruct -> analysis pipeline.
+    Run as 
+        python -m src.cli run --config configs/experiment.yaml
+    """
     
     cfg = load_experiment_config(args.config)
     _apply_cli_overrides(cfg, args)
     
-    run_experiment(cfg)
-    return 0
-
-def _run_simulate_cmd(args) -> int:
-    from .config import load_simulate_config
-    from .simulate import run_simulation
+    logger.info("=== STEP 1: SIMULATION ===")
+    exp_dir = run_simulation(cfg)
+    cfg.exp_dir = exp_dir
     
-    cfg = load_simulate_config(arg.config)
-    _apply_cli_overrides(cfg, args)
-    if getattr(args, "seed", None) is not None:
-        cfg.simulation.seed = args.seed
-
-    out_dir = run_simulation(cfg)
-    logger.info(f"Simulation complete. Data saved to:\n  {out_dir}")
-    return 0
-
-def _run_reconstruct_cmd(args) -> int:
-    from .config import load_reconstruct_config
-    from .reconstruct import run_reconstruction
+    # Point reconstruction config to the newly generated projection data
+    logger.info("=== STEP 2: RECONSTRUCTION ===")
+    run_reconstruction(cfg)
     
-    cfg = load_reconstruct_config(args.config)
-    _apply_cli_overrides(cfg, args)
-    
-    if getattr(args, "data", None):
-        cfg.data_path = args.data
-    if getattr(args, "skip_analysis", False):
-        cfg.analysis_enabled = False
+    if cfg.analysis.enabled:
+        logger.info("=== STEP 3: ANALYSIS ===")
+        run_analysis(exp_dir, cfg)
         
-    run_reconstruction(cfg.reconstruct)
-    return 0
+    logger.info("=== EXPERIMENT COMPLETE: %s ===", exp_dir)
+    
+    return exp_dir
+
+
+def _run_simulate_cmd(args) -> Path:
+    """Run the simulation component.
+    Run as  
+        python -m src.cli simulate --config configs/experiment.yaml --seed 1
+    """
+    
+    cfg = load_experiment_config(args.config)
+    _apply_cli_overrides(cfg, args)
+    
+    if getattr(args, "seed", None) is not None:
+        cfg.seed = args.seed
+
+    exp_dir = run_simulation(cfg)
+    logger.info(f"Simulation complete. Data saved to:\n  {exp_dir}")
+    
+    return exp_dir
+
+
+def _run_reconstruct_cmd(args) -> GMMTomographySolver:
+    """Run the reconstruction component.
+    Run as
+         python -m src.cli reconstruct --config configs/experiment.yaml --exp-dir data/seed1_N8_nproj150
+    """
+    
+    cfg = load_experiment_config(args.config)
+    _apply_cli_overrides(cfg, args)
+    
+    if getattr(args, "exp_dir", None):
+        cfg.exp_dir = args.exp_dir
+    
+    return run_reconstruction(cfg)
+
+
+def _run_analysis_cmd(args) -> Path:
+    """Run the analysis component.
+    Run as
+        python -m src.cli analysis --config configs/experiment.yaml --exp-dir data/seed1_N8_nproj150
+    """
+    
+    cfg = load_experiment_config(args.config)
+    exp_dir = Path(args.exp_dir)
+    
+    run_analysis(exp_dir, cfg)
+    
+    return exp_dir
+
 
 def _apply_cli_overrides(cfg, args) -> None:
     if args.device:

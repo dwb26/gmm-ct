@@ -1,5 +1,8 @@
 device: null
-seed: 10
+seed: 12
+add_sino_noise: true
+# snr_db: 20
+snr_db: 10000
 
 model: 
   sim_n_gaussians: 8
@@ -9,7 +12,7 @@ geometry:
   sources:
     - [-1.0, -1.0]
   receivers:
-    n_receivers: 128
+    n_receivers: 256
     x_coordinate: 4.0
     y_min: -3.0
     y_max: 1.0
@@ -19,10 +22,10 @@ physics:
     - [1.0, 1.0]
   initial_accelerations:
     - [0.0, -9.81]
-  omega_range: [2.0, 6.0]
+
+  omega_range: [1.0, 3.0]
   n_projections: 150
-  duration: 1.5
-  # initial_velocities: [0.75, 0.5]
+  duration: 2.0
   initial_velocities: [0.1, 0.25]
 
 reconstruction:

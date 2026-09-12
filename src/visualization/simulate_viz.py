@@ -510,8 +510,7 @@ def _plot_gmm_3d_marginal(
 def animate_simulation(
     sim_dir: str | Path,
     output_path: Optional[str | Path] = None,
-    fps: int = 15,
-    upsample: int = 8,
+    upsample: int = 2,
     show_trajectories: bool = True,
     title_fontsize: int = 18,
     label_fontsize: int = 16,
@@ -823,9 +822,7 @@ def animate_simulation(
     if output_path:
         output_path = Path(output_path)
         fps_save = n_frames / (t_end - t_start)
-        logger.info("Saving simulation animation to %s ...", output_path)
         anim.save(str(output_path), writer='ffmpeg', fps=fps_save)
-        logger.info("Saved: %s", output_path)
 
     return anim
 
@@ -1338,7 +1335,6 @@ def export_poster_gmm_figure(
     # plt.tight_layout()
     fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
     plt.savefig(sim_dir / output_path, bbox_inches="tight")
-    print(f"Poster figure saved successfully to {sim_dir / output_path}")
 
 
 def export_poster_snapshot_sinogram_figure(
@@ -1452,4 +1448,3 @@ def export_poster_snapshot_sinogram_figure(
     ax_sino.set_title("Dynamic Sinogram", fontweight="bold", fontsize=18, pad=8)
 
     plt.savefig(sim_dir / output_path, bbox_inches="tight")
-    print(f"Composite figure saved successfully to {sim_dir / output_path}")

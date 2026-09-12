@@ -4,18 +4,6 @@ Synthetic data simulation for GMM-CT.
 Generates projection data from a ground-truth GMM and saves it alongside
 the true parameters so that the data can later be fed into the
 reconstruction pipeline without coupling to the reconstruction code.
-
-Usage (Python API)::
-
-    from gmm_ct.simulation import run_simulation
-    from gmm_ct.config.yaml_config import load_simulate_config
-
-    cfg = load_simulate_config("configs/simulate.yaml")
-    run_simulation(cfg)
-
-Usage (CLI)::
-
-    gmm-ct simulate --config configs/simulate_2D.yaml
 """
 
 import logging
@@ -31,9 +19,8 @@ logging.basicConfig(
 import torch
 
 from .config import ExperimentConfig
+from .utils import export_parameters, generate_true_param, set_random_seeds, add_sinogram_noise
 from .model import GMM_reco
-from .utils import export_parameters, generate_true_param, set_random_seeds
-
 from .visualization.simulate_viz import (animate_simulation,
                                          export_poster_gmm_figure,
                                          export_poster_snapshot_sinogram_figure,
@@ -51,25 +38,17 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
         cfg.device if cfg.device else ("cuda" if torch.cuda.is_available() else "cpu")
     )
 
-    # --- Geometry & Physics ---
+    # --- Fix the geometry & physics from config ---
     sources, receivers = cfg.geometry.to_tensors(device)
     d = cfg.geometry.dimensionality
-
     N = cfg.sim_n_gaussians
     x0s, a0s = cfg.physics.to_tensors(N, device)
     omega_min, omega_max = cfg.physics.omega_range
     n_proj = cfg.physics.n_projections
+    t = torch.linspace(0.0, cfg.physics.duration, cfg.physics.n_projections, 
+                       dtype=torch.float64, device=device)
 
-    # --- Time mesh ---
-    t = torch.linspace(
-        0.0,
-        cfg.physics.duration,
-        cfg.physics.n_projections,
-        dtype=torch.float64,
-        device=device,
-    )
-
-    # --- Ground truth parameters ---
+    # --- Simulate the ground truth parameters ---
     v_base = torch.tensor(
         cfg.physics.initial_velocities, dtype=torch.float64, device=device
     )
@@ -83,13 +62,17 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
         max_rot=omega_max, 
         device=device,
     )
-
-    # --- Output directory ---
+    
+    # --- Setup output directory ---
+    snr_db = 1e+08
+    if cfg.add_sino_noise:
+        snr_db = cfg.snr_db
+        
     out_dir = Path(cfg.output.directory)
     if getattr(cfg.output, "use_timestamp", False):
         folder_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_seed{cfg.seed}_N{N}"
     else:
-        folder_name = f"seed{cfg.seed}_N{N}_nproj{n_proj}"
+        folder_name = f"seed{cfg.seed}_N{N}_nproj{n_proj}_snr{snr_db}"
     
     exp_dir = out_dir / folder_name
     exp_dir.mkdir(parents=True, exist_ok=True)
@@ -104,9 +87,13 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
         x0s=x0s, a0s=a0s,
         omega_min=omega_min, 
         omega_max=omega_max, 
-        output_dir=exp_dir,
+        exp_dir=exp_dir,
     )
     proj_data = model.generate_projections(t, theta_true)
+    if cfg.add_sino_noise:
+        proj_data = [add_sinogram_noise(
+            proj_data=model.process_projections(proj_data),
+            snr_db=snr_db)]
 
     # --- Save projections ---
     proj_tensor = model.process_projections(proj_data)
@@ -144,14 +131,14 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
     )
 
     # --- Visualizations ---
-    if cfg.analysis.skip_animations:
-        pass
-    else:
-        logger.info(f"Generating the plots and animations...")
-        animate_simulation(
-            sim_dir=exp_dir,
-            output_path=exp_dir / 'simulation_2d.mp4',
-        )
+    # if cfg.analysis.skip_animations:
+    #     pass
+    # else:
+    #     logger.info(f"Generating the plots and animations...")
+    #     animate_simulation(
+    #         sim_dir=exp_dir,
+    #         output_path=exp_dir / 'simulation_2d.mp4',
+    #     )
     export_poster_gmm_figure(exp_dir)
     export_poster_snapshot_sinogram_figure(exp_dir)
 

@@ -12,12 +12,11 @@ import math
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 from torchmin import minimize
-from tqdm.auto import tqdm
 
 from .utils import NewtonRaphsonLBFGS
 from .structures import PeakData
@@ -25,38 +24,25 @@ from .structures import PeakData
 logger = logging.getLogger(__name__)
 
 class GMM_reco:
-    """Reconstruct GMM parameters from CT projection data.
-
-    Parameters
-    ----------
-    d : Spatial dimensionality (2 for 2-D problems).
-    N : Number of Gaussian components.
-    sources : X-ray source positions.
-    receivers : Receiver positions, one list per source.
-    x0s : Known initial positions for each Gaussian.
-    a0s : Known accelerations for each Gaussian.
-    omega_min, omega_max : Angular velocity search bounds (Hz).
-    device : Computation device (auto-detected when None).
-    output_dir : Directory for diagnostic plots (default: ``'data/results/'``).
-    n_traj_trials : Multi-start trials for Stage 1 (default: max(20, 2·N)).
-    n_omega_inits : Multi-start trials for Stage 2 (default: 5).
-    save_diagnostics : Save diagnostic plots at the end of Stage 1 (default: True).
-    """
+    """Reconstruct GMM parameters from CT projection data."""
+    
     def __init__(
         self, 
-        d: int, 
-        N: int, 
-        sources: list[torch.Tensor], 
-        receivers: list[list[torch.Tensor]],
-        x0s: list[torch.Tensor], 
-        a0s: list[torch.Tensor],
-        omega_min: float, 
-        omega_max: float, 
-        output_dir: str,
-        device: str = "cpu", 
-        n_traj_trials: int | None = None, 
-        n_omega_inits: int | None = None,
-        save_diagnostics: bool = True,
+        d: int,                                 # Spatial dimensionality (e.g. 2 for 2-D problems).
+        N: int,                                 # Number of Gaussian components.
+        sources: list[torch.Tensor],            # X-ray source positions.
+        receivers: list[list[torch.Tensor]],    # Receiver positions, one list per source.
+        x0s: list[torch.Tensor],                # Initial positions for each Gaussian.
+        a0s: list[torch.Tensor],                # Accelerations for each Gaussian.
+        omega_min: float,                       # Minimum angular velocity (Hz).
+        omega_max: float,                       # Maximum angular velocity (Hz).
+        exp_dir: str,                           # Directory for diagnostic plots.
+        device: str = "cpu",                    # Computation device (auto-detected when None).
+        n_traj_trials: int | None = None,       # Multi-start trials for Stage 1 (default: max(20, 2·N)).
+        n_omega_inits: int | None = None,       # Multi-start trials for Stage 2 (default: 5).
+        save_diagnostics: bool = True,          # Save diagnostic plots at the end of Stage 1
+        fitted_gaussian_peaks: dict[float, torch.Tensor] | None = None,
+        peak_detection_records: pd.DataFrame | None = None,
     ):
         self.d = d
         self.N = N
@@ -68,6 +54,8 @@ class GMM_reco:
         self.n_omega_inits = n_omega_inits
         self.save_diagnostics = save_diagnostics
         self.t_observable = []
+        self.fitted_gaussian_peaks = fitted_gaussian_peaks
+        self.peak_detection_records = peak_detection_records
 
         # Device
         self.device = (
@@ -75,9 +63,9 @@ class GMM_reco:
             else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         )
 
-        self.output_dir = Path(output_dir) if output_dir else Path('data/results')
+        self.exp_dir = Path(exp_dir) if exp_dir else Path('data/results')
         if self.save_diagnostics:
-            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self.exp_dir.mkdir(parents=True, exist_ok=True)
 
         # Precomputed constant
         self.sqrt_pi = math.sqrt(math.pi)
@@ -119,7 +107,7 @@ class GMM_reco:
             omega_min=omega_min,
             omega_max=omega_max,
             device=device,
-            output_dir=cfg.output.directory,
+            exp_dir=cfg.output.directory,
             n_traj_trials=cfg.reconstruction.n_trajectory_trials,
             n_omega_inits=cfg.reconstruction.n_omega_inits,
             save_diagnostics=cfg.output.save_plots,
@@ -138,35 +126,19 @@ class GMM_reco:
         self.t = t.to(self.device) if isinstance(t, torch.Tensor) else torch.tensor(t, device=self.device)
         self.proj_data = self.process_projections(self._to_device(proj_data))
 
-        stage_bar = tqdm(
-            total=4, desc="GMM-CT fit", unit="stage", leave=True,
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} stages [{elapsed}<{remaining}]"
-        )
-
         # Stage 1: Trajectory Optimization
-        stage_bar.set_description("GMM-CT  [1/4 trajectory]")
         soln_dict = self._stage_trajectory_optimization(t, proj_data)
         self.theta_pre_stage1_5 = self._clone_dict(soln_dict)
-        stage_bar.update(1)
 
         # Stage 1.5a: Grid Search for Angular Velocities (ω)
-        stage_bar.set_description("GMM-CT  [2/4 ω search]")
         soln_dict = self._stage_omega_initialization(soln_dict)
-        stage_bar.update(1)
 
         # Stage 1.5b: NNLS for Amplitudes (α)
-        stage_bar.set_description("GMM-CT  [3/4 NNLS α]")
         soln_dict = self._stage_alpha_initialization(soln_dict)
         self.theta_pre_stage2 = self._clone_dict(soln_dict)
-        stage_bar.update(1)
 
         # Stage 2: Multi-start Joint Refinement
-        stage_bar.set_description("GMM-CT  [4/4 joint opt.]")
         soln_dict = self._stage_multistart_joint(soln_dict, warm_start=True)
-        stage_bar.update(1)
-
-        stage_bar.set_description("GMM-CT  [done]")
-        stage_bar.close()
 
         return soln_dict
 
@@ -290,14 +262,13 @@ class GMM_reco:
         self.theta_fixed = {
         'x0s': [x0.clone().detach() for x0 in self.x0s],
         'a0s': [a0.clone().detach() for a0 in self.a0s],
-    }
+        }
 
         n_traj_trials = self.n_traj_trials or max(20, 2 * self.N)
         logger.info("Running %d trajectory multi-start trials", n_traj_trials)
 
         errors, results = [], []
-        trial_bar = tqdm(range(n_traj_trials), desc='  trials', unit='trial', leave=False)
-        for n_trial in trial_bar:
+        for n_trial in range(n_traj_trials):
             logger.info("Trial %d/%d", n_trial + 1, n_traj_trials)
             self.theta_dict_init = self.initialize_parameters(t, proj_data)
             for v0_n in self.theta_dict_init["v0s"]:
@@ -313,7 +284,6 @@ class GMM_reco:
             )
             errors.append(res_trial.fun)
             results.append(res_trial)
-            trial_bar.set_postfix({'best': f'{min(errors):.3e}'})
 
         best_res = results[np.argmin(np.array(errors))]
         soln_dict = self.construct_soln_dict(best_res)
@@ -325,6 +295,7 @@ class GMM_reco:
             )
 
         soln_dict["v0s"] = [v0_n.clone().detach() for v0_n in soln_dict["v0s"]]
+        logger.info(f"The estimates v0s are {soln_dict["v0s"]}")
         
         if self.save_diagnostics:
             self._plot_stage1_diagnostics(best_res)
@@ -366,7 +337,30 @@ class GMM_reco:
         self.peak_data = PeakData(self.N, self.device)
         proj_data_array = proj_data[0] if isinstance(proj_data, list) else proj_data
         
-        self._detect_all_peaks(proj_data_array, self.receivers[0], t)
+        if self.fitted_gaussian_peaks is None:
+            self._detect_all_peaks(proj_data_array, self.receivers[0], t)
+        else:
+            pdr = self.peak_detection_records.copy()
+            
+            for time_val, detected_heights in self.fitted_gaussian_peaks.items():
+                t_val_float = time_val.item() if isinstance(time_val, torch.Tensor) else float(time_val)
+                self.peak_data.add_time_detections(t_val_float, detected_heights)
+                
+                sub_df = pdr[
+                    torch.isclose(torch.tensor(pdr['time_val'].values, dtype=torch.float64), 
+                                  torch.tensor(t_val_float, dtype=torch.float64)
+                                  ).numpy()
+                    ].sort_values(by='gaussian_idx')                
+                for n_r, row in enumerate(sub_df.itertuples()):
+                    self.peak_data.add_peak_detection(
+                        time_idx=int(row.time_idx),
+                        time_val=row.time_val,
+                        receiver_idx=int(row.receiver_idx),
+                        receiver_pos=row.receiver_pos,  # Sub-pixel fitted mean (mu) or grid pos
+                        peak_val=row.peak_val,
+                        gaussian_idx=int(row.gaussian_idx),
+                    )
+                
         self.peak_data.finalize_detections()
         self._create_legacy_aliases()
 
@@ -504,8 +498,12 @@ class GMM_reco:
             assignments_k = self.assigned_curve_data[k]
             if not assignments_k:
                 continue
-            time_indices = [item[0] for item in assignments_k]
-            observed_heights = torch.stack([item[1] for item in assignments_k])
+            time_indices = [int(item[0]) for item in assignments_k]
+            observed_heights = torch.stack([
+                item[1] if isinstance(item[1], torch.Tensor) 
+                else torch.tensor(item[1], dtype=torch.float64, device=self.device) 
+                for item in assignments_k
+            ])
             predicted_heights = r_maxs_list[k][time_indices, 1]
             loss += torch.norm(predicted_heights - observed_heights, p=1)
         return loss
@@ -647,11 +645,7 @@ class GMM_reco:
             dtype=torch.float64, device=self.device,
         )
         
-        gaussian_bar = tqdm(range(n_gaussians), desc='  Gaussians', unit='ρ', leave=False)
-        
-        for n in gaussian_bar:
-            gaussian_bar.set_description(f"   ρ{n + 1}/{n_gaussians}")
-        
+        for n in range(n_gaussians):
             # Compute background projection (all Gaussians EXCEPT n)
             bg_dict = {key: list(vals) for key, vals in soln_dict.items()}
             bg_dict["alphas"] = [
@@ -719,7 +713,7 @@ class GMM_reco:
         With trajectories, shapes and omegas fixed, the forward model is linear
         in alphas.  Solves ``min_{α≥0} ‖Φα − p_obs‖₂²`` in closed form.
         """
-        logger.info("Stage 1.5b: NNLS alpha initialisation")
+        logger.info("Stage 1.5b: NNLS alpha initialization")
         
         # Restrict to observable time steps and peak data
         t_obs = self.t[self.peak_data.observable_indices]
@@ -798,9 +792,7 @@ class GMM_reco:
         }
 
         all_losses, all_results = [], []
-        joint_bar = tqdm(range(n_trials), desc='  Trials', unit='trial', leave=False)
-
-        for trial_idx in joint_bar:
+        for trial_idx in range(n_trials):
             if warm_start and trial_idx == 0:
                 initial_omegas = [w.clone().detach() for w in soln_dict['omegas']]
             else:
@@ -836,7 +828,6 @@ class GMM_reco:
 
             all_losses.append(final_loss)
             all_results.append(result_dict)
-            joint_bar.set_postfix({'best_loss': f'{min(all_losses):.3e}'})
 
             logger.info(
                 "  Trial %d/%d: loss = %.6e | ω = [%s] Hz",
@@ -1030,14 +1021,14 @@ class GMM_reco:
             plot_gmm_and_projections,
             plot_heights_by_assignment,
             # plot_raw_receiver_heights,
-            plot_trajectory_estimations,
+            # plot_trajectory_estimations,
             # plot_trajectory_fitting,
         )
-        plot_trajectory_estimations(model=self, res=best_res)
-        # plot_raw_receiver_heights(self)
-        plot_heights_by_assignment(self)
         # plot_assignment_quality(model=self, res=best_res)
         plot_gmm_and_projections(model=self, res=best_res, theta_true=getattr(self, "theta_true", None))
+        plot_heights_by_assignment(self)
+        # plot_raw_receiver_heights(self)
+        # plot_trajectory_estimations(model=self, res=best_res)
         # plot_trajectory_fitting(model=self, res=best_res)
         
     def _plot_assignment_diagnostics(self):

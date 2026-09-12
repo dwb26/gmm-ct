@@ -19,13 +19,6 @@ def construct_receivers(device=None, *args):
     """Build a flat (parallel-beam) receiver array on a vertical line (2D) or
     a planar grid (3D).
 
-    Parameters
-    ----------
-    device : torch.device, optional
-        Device for the output tensors (default: CPU).
-    *args : tuple
-        A single tuple describing the geometry:
-
         * **2D** – ``(n_receivers, x1, x2_min, x2_max)``
         * **3D** – ``(n_receivers_y, n_receivers_z, x1, y_min, y_max, z_min, z_max)``
 
@@ -48,7 +41,6 @@ def construct_receivers(device=None, *args):
             torch.tensor([x1, x2_val], dtype=torch.float64, device=device)
             for x2_val in x2
         ]]
-
     elif len(params) == 7:
         # 3D: receivers on a flat y×z panel at fixed x1
         n_rcvrs_y, n_rcvrs_z, x1, y_min, y_max, z_min, z_max = params
@@ -60,7 +52,6 @@ def construct_receivers(device=None, *args):
             for y_val in y
             for z_val in z
         ]]
-
     else:
         raise ValueError(
             f"Expected a tuple of length 4 (2D) or 7 (3D), got {len(params)}."
@@ -70,6 +61,36 @@ def construct_receivers(device=None, *args):
 # ==========================================================================
 # Ground-truth parameter generation
 # ==========================================================================
+
+def generate_bounded_velocity_ensemble(
+    N: int,
+    v_min: tuple[float, float] = (0.1, -0.5),
+    v_max: tuple[float, float] = (2.0, 5.0),
+    alpha: float = 0.4,         # Memory factor (0 = independent, 1 = constant)
+    device: torch.device = torch.device('cpu')
+) -> list[torch.Tensor]:
+    """
+    Generates N velocity vectors using a bounded mean-reverting process
+    to maintain organic variability while mitigating particle trajectory overlap.
+    """
+    v_min_t = torch.tensor(v_min, dtype=torch.float64, device=device)
+    v_max_t = torch.tensor(v_max, dtype=torch.float64, device=device)
+    
+    # Latent state initialized at center (0.0 maps to midpoint in sigmoid space)
+    z = torch.zeros(2, dtype=torch.float64, device=device)
+    step_std_vec = torch.tensor([0.25, 1.25], dtype=torch.float64, device=device)
+    
+    v0s = []
+    for _ in range(N):
+        # Mean-reverting random walk step in latent space
+        noise = torch.randn(2, dtype=torch.float64, device=device) * step_std_vec
+        z = alpha * z + noise
+        
+        # Sigmoidal mapping to physical velocity bounds [v_min, v_max]
+        v_k = v_min_t + (v_max_t - v_min_t) * torch.sigmoid(z)
+        v0s.append(v_k)
+        
+    return v0s
 
 def generate_true_param(
     d: int, 
@@ -114,10 +135,8 @@ def generate_true_param(
     # ---- Generate morphology precision matrices – rejection-sample to enforce minimum anisotropy
     U_ns = []
     for _ in range(N):
-        for _attempt in range(500):
-            # mean_diag_val = 7.5
+        for _ in range(500):
             mean_diag_val = 15.5
-            # U_n_diag = torch.rand(size=(d,), dtype=torch.float64, device=device) * 18.0 + mean_diag_val
             U_n_diag = torch.rand(size=(d,), dtype=torch.float64, device=device) * 30.0 + mean_diag_val
 
             # Test for the anisotropy condition before constructing the full matrix. If fails, restart
@@ -156,27 +175,9 @@ def generate_true_param(
         for _ in range(N)
     ]
 
-    # Initial positions (shared for all Gaussians, assumed known)
+    # Trajectory parameters
     x0s = [initial_location.to(torch.float64) for _ in range(N)]
-
-    # Initial velocities
-    hardcoded = True
-    if hardcoded and N == 5 and d == 2:
-        v0s = [
-            torch.tensor([1.0, 3.0], dtype=torch.float64, device=device),
-            torch.tensor([1.5, 1.8], dtype=torch.float64, device=device),
-            torch.tensor([0.8, 2.5], dtype=torch.float64, device=device),
-            torch.tensor([0.75, 1.2], dtype=torch.float64, device=device),
-            torch.tensor([2., 3.], dtype=torch.float64, device=device),
-        ]
-    else:
-        v0s = [
-            initial_velocity.to(torch.float64) + (
-                torch.rand(d, dtype=torch.float64, device=device)
-            ) * 2.5
-            for _ in range(N)
-        ]
-
+    v0s = generate_bounded_velocity_ensemble(N)
     a0s = [initial_acceleration.to(torch.float64) for _ in range(N)]
 
     return {"alphas": alphas, "U_skews": U_ns, "omegas": omegas,
@@ -313,8 +314,37 @@ def export_parameters(
                     if error_values and i < len(error_values):
                         f.write(f"\n**Frobenius error:** {error_values[i]:.4f}\n")
                     f.write("\n")
-
-    logger.info("Parameters exported to %s", filename)
+    
+    
+def add_sinogram_noise(
+    proj_data: list[torch.Tensor] | torch.Tensor,
+    snr_db: float, 
+    seed: int | None = None,
+) -> list[torch.Tensor] | torch.Tensor:
+    """Adds zero-mean Gaussian noise to sinogram projection data based on a target SNR."""
+    if seed is not None:
+        torch.manual_seed(seed)
+    
+    is_list = isinstance(proj_data, list)
+    if is_list:
+        data_tensor = torch.stack(proj_data)
+    else:
+        data_tensor = proj_data
+    
+    # Compute signal power (mean square of signal)
+    signal_power = torch.mean(data_tensor ** 2, dim=1, keepdim=True)
+    
+    # Calculate required noise standard deviation per time
+    noise_std = torch.sqrt(signal_power * (10.0 ** (-snr_db / 10.0)))
+    
+    # Broadcast noise scale across detector elements
+    noise = torch.randn_like(data_tensor) * noise_std
+    noisy_tensor = data_tensor + noise
+    
+    if is_list:
+        return [noisy_tensor[i] for i in range(noisy_tensor.shape[0])]
+    return noisy_tensor
+    
 
 
 # ==========================================================================
@@ -358,4 +388,19 @@ def NewtonRaphsonLBFGS(
     return x0
 
 
-
+    # hardcoded = False
+    # if hardcoded and N == 5 and d == 2:
+    #     v0s = [
+    #         torch.tensor([1.0, 3.0], dtype=torch.float64, device=device),
+    #         torch.tensor([1.5, 1.8], dtype=torch.float64, device=device),
+    #         torch.tensor([0.8, 2.5], dtype=torch.float64, device=device),
+    #         torch.tensor([0.75, 1.2], dtype=torch.float64, device=device),
+    #         torch.tensor([2., 3.], dtype=torch.float64, device=device),
+    #     ]
+    # else:
+    # v0s = [
+        # initial_velocity.to(torch.float64) + torch.abs(
+            # torch.randn(d, dtype=torch.float64, device=device)
+        # ) * torch.tensor([1.75, 2.5])
+        # for _ in range(N)
+    # ]

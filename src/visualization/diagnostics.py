@@ -72,7 +72,7 @@ def plot_trajectory_estimations(model, res):
     plt.ylabel('Height', fontsize=_LABEL_FONTSIZE)
     ax.tick_params(axis='both', which='major', labelsize=_TICK_FONTSIZE)
 
-    filename = model.output_dir / f'trajectory_estimations_K{model.N}.png'
+    filename = model.exp_dir / f'trajectory_estimations_K{model.N}.png'
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     plt.close()
 
@@ -91,8 +91,10 @@ def plot_heights_by_assignment(model, true_data=False):
     fig, ax = plt.subplots(figsize=(10, 6))
 
     for k, data_k in enumerate(model.assigned_curve_data):
+        if not data_k:
+            continue
         inds = [item[0] for item in data_k]
-        heights = [item[1].item() for item in data_k]
+        heights = [item[1].item() if isinstance(item[1], torch.Tensor) else float(item[1]) for item in data_k]
         t_obs = model.t_observable[inds].cpu().numpy()
         ax.scatter(t_obs, heights, s=10)
 
@@ -106,7 +108,7 @@ def plot_heights_by_assignment(model, true_data=False):
 
     suffix = '_true_data' if true_data else ''
     filename = (
-        model.output_dir / f'heights_by_assignment_K{model.N}{suffix}.png'
+        model.exp_dir / f'heights_by_assignment_K{model.N}{suffix}.png'
     )
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     plt.close()
@@ -194,7 +196,7 @@ def plot_assignment_quality(model, res):
         if not data_k:
             continue
         inds = [item[0] for item in data_k]
-        heights = [item[1].item() for item in data_k]
+        heights = [item[1].item() if isinstance(item[1], torch.Tensor) else float(item[1]) for item in data_k]
         t_obs = model.t_observable[inds].cpu().numpy()
         ax.scatter(t_obs, heights, s=18, color=colors[k],
                    label=f'$\\rho_{{{k+1}}}$', zorder=5)
@@ -218,7 +220,7 @@ def plot_assignment_quality(model, res):
         if not data_k:
             continue
         inds = [item[0] for item in data_k]
-        obs_h = np.array([item[1].item() for item in data_k])
+        obs_h = np.array([item[1].item() if isinstance(item[1], torch.Tensor) else float(item[1]) for item in data_k])
         t_obs = model.t_observable[inds].cpu().numpy()
         pred_h_k = r_maxs_list[k][inds, 1].detach().cpu().numpy()
 
@@ -237,7 +239,7 @@ def plot_assignment_quality(model, res):
                  fontsize=_TITLE_FONTSIZE + 2, fontweight='bold', y=1.02)
     plt.tight_layout()
 
-    filename = model.output_dir / f'assignment_quality_K{model.N}.png'
+    filename = model.exp_dir / f'assignment_quality_K{model.N}.png'
     plt.savefig(filename, dpi=200, bbox_inches='tight')
     plt.close()
 
@@ -368,7 +370,8 @@ def plot_gmm_and_projections(model, res, n_gmm_times=8, theta_true=None):
         if not data_k:
             continue
         inds = [item[0] for item in data_k]
-        heights = [item[1].item() for item in data_k]
+        # heights = [item[1].item() if isinstance(item[1], torch.Tensor) else float(item[1]) for item in data_k]
+        heights = [item[1] if isinstance(item[1], torch.Tensor) else float(item[1]) for item in data_k]
         t_pts = model.t_observable[inds].cpu().numpy()
         ax.scatter(t_pts, heights, s=14, color=gauss_colors[k],
                    alpha=0.85, zorder=5, label=f'$\\rho_{{{k+1}}}$')
@@ -384,7 +387,7 @@ def plot_gmm_and_projections(model, res, n_gmm_times=8, theta_true=None):
                  fontsize=_TITLE_FONTSIZE + 2, fontweight='bold', y=1.01)
     plt.tight_layout()
 
-    filename = model.output_dir / f'gmm_and_projections_K{model.N}.png'
+    filename = model.exp_dir / f'gmm_and_projections_K{model.N}.png'
     plt.savefig(filename, dpi=200, bbox_inches='tight')
     plt.close()
 
@@ -510,6 +513,6 @@ def plot_trajectory_fitting(model, res):
 
     plt.tight_layout(pad=0.4)
 
-    filename = model.output_dir / f'trajectory_fitting_K{model.N}.png'
+    filename = model.exp_dir / f'trajectory_fitting_K{model.N}.png'
     plt.savefig(filename, dpi=200, bbox_inches='tight')
     plt.close()

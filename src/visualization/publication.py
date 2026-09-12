@@ -97,7 +97,7 @@ def match_estimated_to_true_gaussians(theta_true, theta_est, K):
                 + 1.0 * dist_x0
             )
 
-    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+    _, col_ind = linear_sum_assignment(cost_matrix)
     matching_indices = col_ind.tolist()
     return matching_indices
 
@@ -644,7 +644,7 @@ def plot_temporal_gmm_comparison(
         theta_true["a0s"],
         omega_min=0.0,
         omega_max=10.0,
-        output_dir=output_dir,
+        exp_dir=output_dir,
         device=theta_true["x0s"][0].device,
     )
     GMM_est_obj = GMM_reco(
@@ -656,7 +656,7 @@ def plot_temporal_gmm_comparison(
         theta_est_reordered["a0s"],
         omega_min=0.0,
         omega_max=10.0,
-        output_dir=output_dir,
+        exp_dir=output_dir,
         device=theta_est_reordered["x0s"][0].device,
     )
 
@@ -1177,11 +1177,11 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     # Generate projections
     GMM_true_obj = GMM_reco(d, K, sources, receivers, 
                             theta_true['x0s'], theta_true['a0s'], omega_min=0.0, omega_max=10.0,
-                            output_dir=output_dir,
+                            exp_dir=output_dir,
                             device=theta_true['x0s'][0].device)
     GMM_est_obj = GMM_reco(d, K, sources, receivers,
                            theta_est_reordered['x0s'], theta_est_reordered['a0s'], omega_min=0.0, omega_max=10.0,
-                           output_dir=output_dir,
+                           exp_dir=output_dir,
                            device=theta_est_reordered['x0s'][0].device)
     
     proj_true = GMM_true_obj.generate_projections(t, theta_true)
@@ -2371,10 +2371,9 @@ def plot_projection_modes(
     # Defaults
     # ------------------------------------------------------------------
     if time_snapshot_indices is None:
-        # time_snapshot_indices = list(
-            # np.round(np.linspace(1, n_times * 0.75, 4)).astype(int)
-        # )
-        time_snapshot_indices = [ 80, 90, 100, 110 ]
+        # time_snapshot_indices = [ 80, 90, 100, 110 ]
+        start_idx = len(t) // 3; step = len(t) // 6
+        time_snapshot_indices = [int(start_idx + n * step) for n in range(4)]
     if len(time_snapshot_indices) != 4:
         raise ValueError("time_snapshot_indices must contain exactly 4 indices.")
 
