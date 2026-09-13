@@ -14,7 +14,6 @@ from time import time as wall_clock
 import numpy as np
 import torch
 import pandas as pd
-# import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 from .config import ExperimentConfig

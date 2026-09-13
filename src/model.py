@@ -48,7 +48,7 @@ class GMM_reco:
         self.a0s = a0s
         self.omega_min = omega_min
         self.omega_max = omega_max
-        self.n_traj_trials = 5 * N
+        self.n_traj_trials = 10 * N
         self.n_omega_inits = 5 * N
         self.save_diagnostics = save_diagnostics
         self.t_observable = []
@@ -326,7 +326,7 @@ class GMM_reco:
         for _ in range(self.N):
             v0 = torch.tensor([1.0, 1.0], dtype=torch.float64, device=self.device)
             # v0 = v0 + 1.5 * torch.randn(2, dtype=torch.float64, device=self.device)
-            v0 = v0 + 3.5 * torch.randn(2, dtype=torch.float64, device=self.device)
+            v0 = v0 + 3.0 * torch.abs(torch.randn(2, dtype=torch.float64, device=self.device))
             v0.requires_grad_(True)
             v0s.append(v0)
             
