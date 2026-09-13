@@ -190,7 +190,8 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
         )
 
         if len(params) > 0:
-            params = params[params[:, 1] > 0.075]
+            # params = params[params[:, 1] > 0.075]
+            params = params[params[:, 1] > 0.1]
             
             time_val_scalar = (
                 t[n_p].item() if isinstance(t[n_p], torch.Tensor) else float(t[n_p])
