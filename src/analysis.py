@@ -150,6 +150,7 @@ def analyze_results(
                 theta_true=theta_true, 
                 theta_est=theta_init, 
                 output_dir=exp_dir,
+                proj_data=proj_data,
                 t=t, K=N, d=d,
                 filename=exp_dir / "initial_temporal_gmm_comparison.pdf",
                 title="Stage 2 Initialization",
@@ -162,6 +163,7 @@ def analyze_results(
             theta_est=theta_est,
             t=t, K=N, d=d,
             output_dir=exp_dir,
+            proj_data=proj_data,
             filename=exp_dir / "temporal_gmm_comparison.pdf",
             title="Reconstruction",
         )
@@ -187,6 +189,7 @@ def analyze_results(
             theta_est=theta_est, 
             t=t, K=N, d=d,
             output_dir=exp_dir,
+            proj_data=proj_data,
             filename=exp_dir / "temporal_gmm_comparison.mp4",
         )
 

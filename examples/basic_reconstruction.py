@@ -172,11 +172,13 @@ def main():
     )
     plot_temporal_gmm_comparison(
         sources, rcvrs, theta_true, soln, t, N, D,
+        proj_data=proj_data,
         time_indices=[17, 20, 22],
         filename=out_dir / "temporal_gmm_comparison.pdf",
     )
     animate_temporal_gmm_comparison(
         sources, rcvrs, theta_true, soln, t, N, D,
+        proj_data=proj_data,
         filename=out_dir / "temporal_gmm_comparison.mp4",
     )
 

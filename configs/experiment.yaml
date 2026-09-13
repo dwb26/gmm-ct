@@ -1,8 +1,7 @@
 device: null
 seed: 17
 add_sino_noise: true
-snr_db: 40
-# snr_db: 10000
+snr_db: 30
 
 model: 
   sim_n_gaussians: 4

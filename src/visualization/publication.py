@@ -539,8 +539,9 @@ def plot_temporal_gmm_comparison(
     t,
     K,
     d,
-    output_dir: Path,
-    timestamps: list[float] | int | None = [0.83, 0.98],
+    output_dir: Path | str | None = None,
+    proj_data=None,
+    timestamps: list[float] | int | None = None,
     filename=None,
     show_trajectories=True,
     spatial_bounds=None,
@@ -548,6 +549,7 @@ def plot_temporal_gmm_comparison(
     title_fontsize=_FS_TITLE,
     label_fontsize=_FS_LABEL,
     tick_fontsize=_FS_TICK,
+    **kwargs,
 ):
     """Figure 3: Symmetric comparison of ground truth and estimated GMMs over time.
 
@@ -564,14 +566,20 @@ def plot_temporal_gmm_comparison(
             "Temporal GMM comparison currently only supports 2D"
         )
 
+    if "time_indices" in kwargs and timestamps is None:
+        timestamps = kwargs["time_indices"]
+
+    if timestamps is None:
+        timestamps = [0.83, 0.98]
+
     # Convert t to numpy array for indexing if it's a PyTorch tensor
     t_np = t.cpu().numpy() if isinstance(t, torch.Tensor) else np.asarray(t)
 
     # Resolve timestamps into specific target time indices
-    if timestamps is None:
-        time_indices = np.linspace(0, len(t_np) - 1, 3, dtype=int)
-    elif isinstance(timestamps, (int, np.integer)):
+    if isinstance(timestamps, (int, np.integer)):
         time_indices = np.linspace(0, len(t_np) - 1, timestamps, dtype=int)
+    elif isinstance(timestamps, (list, tuple, np.ndarray)) and len(timestamps) > 0 and all(isinstance(x, (int, np.integer)) for x in timestamps):
+        time_indices = np.asarray(timestamps, dtype=int)
     else:
         # Match each float timestamp to its nearest index in the time vector `t`
         time_indices = np.array(
@@ -611,19 +619,24 @@ def plot_temporal_gmm_comparison(
         )
         spatial_bounds = [xmin, xmax, ymin, ymax]
 
-    # Generate projections at selected time points
-    GMM_true_obj = GMM_reco(
-        d,
-        K,
-        sources,
-        receivers,
-        theta_true["x0s"],
-        theta_true["a0s"],
-        omega_min=0.0,
-        omega_max=10.0,
-        exp_dir=output_dir,
-        device=theta_true["x0s"][0].device,
-    )
+    # Use observed projection data if provided, or generate true projections
+    if proj_data is not None:
+        proj_true = proj_data if isinstance(proj_data, (list, tuple)) else [proj_data]
+    else:
+        GMM_true_obj = GMM_reco(
+            d,
+            K,
+            sources,
+            receivers,
+            theta_true["x0s"],
+            theta_true["a0s"],
+            omega_min=0.0,
+            omega_max=10.0,
+            exp_dir=output_dir,
+            device=theta_true["x0s"][0].device,
+        )
+        proj_true = GMM_true_obj.generate_projections(t, theta_true)
+
     GMM_est_obj = GMM_reco(
         d,
         K,
@@ -637,7 +650,6 @@ def plot_temporal_gmm_comparison(
         device=theta_est_reordered["x0s"][0].device,
     )
 
-    proj_true = GMM_true_obj.generate_projections(t, theta_true)
     proj_est = GMM_est_obj.generate_projections(t, theta_est_reordered)
 
     # Create figure
@@ -740,8 +752,8 @@ def plot_temporal_gmm_comparison(
         # CENTER COLUMN: Overlaid projections
         ax_center = fig.add_subplot(gs[row_idx, 1])
 
-        proj_true_t = proj_true[0][t_idx].detach().cpu().numpy()
-        proj_est_t = proj_est[0][t_idx].detach().cpu().numpy()
+        proj_true_t = proj_true[0][t_idx].detach().cpu().numpy() if hasattr(proj_true[0][t_idx], "detach") else np.asarray(proj_true[0][t_idx])
+        proj_est_t = proj_est[0][t_idx].detach().cpu().numpy() if hasattr(proj_est[0][t_idx], "detach") else np.asarray(proj_est[0][t_idx])
 
         sorted_indices = np.argsort(receiver_heights)
         sorted_heights = receiver_heights[sorted_indices]
@@ -1102,7 +1114,7 @@ def animate_gmm_with_joint_projection(
 
 
 def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est, 
-                                     t, K, d, output_dir, filename=None,
+                                     t, K, d, output_dir=None, proj_data=None, filename=None,
                                      show_trajectories=True,
                                      title='', 
                                      title_fontsize=20, label_fontsize=18, tick_fontsize=16,
@@ -1120,6 +1132,8 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     - t: Time vector
     - K: Number of Gaussians
     - d: Dimensionality (must be 2)
+    - output_dir: Optional output directory
+    - proj_data: Observed (noisy) projection data. If provided, used for projection panel.
     - filename: Output filename (should end with .mp4 or .gif)
     - fps: Frames per second of the saved file
     - show_trajectories: Whether to show trajectory paths (default: True)
@@ -1142,24 +1156,28 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
         theta_true, theta_est, K
     )
     
-    # Generate projections
-    GMM_true_obj = GMM_reco(d, K, sources, receivers, 
-                            theta_true['x0s'], theta_true['a0s'], omega_min=0.0, omega_max=10.0,
-                            exp_dir=output_dir,
-                            device=theta_true['x0s'][0].device)
+    # Use observed projection data if provided, or generate clean projections
+    if proj_data is not None:
+        proj_true = proj_data if isinstance(proj_data, (list, tuple)) else [proj_data]
+    else:
+        GMM_true_obj = GMM_reco(d, K, sources, receivers, 
+                                theta_true['x0s'], theta_true['a0s'], omega_min=0.0, omega_max=10.0,
+                                exp_dir=output_dir,
+                                device=theta_true['x0s'][0].device)
+        proj_true = GMM_true_obj.generate_projections(t, theta_true)
+
     GMM_est_obj = GMM_reco(d, K, sources, receivers,
                            theta_est_reordered['x0s'], theta_est_reordered['a0s'], omega_min=0.0, omega_max=10.0,
                            exp_dir=output_dir,
                            device=theta_est_reordered['x0s'][0].device)
     
-    proj_true = GMM_true_obj.generate_projections(t, theta_true)
     proj_est = GMM_est_obj.generate_projections(t, theta_est_reordered)
     
     receiver_heights = np.array([rcvr[1].item() for rcvr in receivers[0]])
     
     # Compute global x-limits for projections (across all time points)
-    proj_true_np = proj_true[0].detach().cpu().numpy()
-    proj_est_np = proj_est[0].detach().cpu().numpy()
+    proj_true_np = proj_true[0].detach().cpu().numpy() if hasattr(proj_true[0], 'detach') else np.asarray(proj_true[0])
+    proj_est_np = proj_est[0].detach().cpu().numpy() if hasattr(proj_est[0], 'detach') else np.asarray(proj_est[0])
     proj_min = min(proj_true_np.min(), proj_est_np.min())
     proj_max = max(proj_true_np.max(), proj_est_np.max())
     proj_margin = (proj_max - proj_min) * 0.05
@@ -1283,8 +1301,8 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
                                    right_artists, is_true=False, mirror=True)
         
         # Plot projections at the nearest data frame
-        proj_true_t = proj_true[0][data_idx].detach().cpu().numpy()
-        proj_est_t = proj_est[0][data_idx].detach().cpu().numpy()
+        proj_true_t = proj_true[0][data_idx].detach().cpu().numpy() if hasattr(proj_true[0][data_idx], 'detach') else np.asarray(proj_true[0][data_idx])
+        proj_est_t = proj_est[0][data_idx].detach().cpu().numpy() if hasattr(proj_est[0][data_idx], 'detach') else np.asarray(proj_est[0][data_idx])
         
         sorted_indices = np.argsort(receiver_heights)
         sorted_heights = receiver_heights[sorted_indices]
