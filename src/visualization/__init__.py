@@ -9,7 +9,6 @@ from .animations import (
 from .diagnostics import (
     plot_trajectory_estimations,
     plot_heights_by_assignment,
-    # plot_raw_receiver_heights,
     plot_assignment_quality,
     plot_gmm_and_projections,
     plot_trajectory_fitting,
@@ -45,7 +44,6 @@ __all__ = [
     # Reconstruction diagnostics (2D)
     'plot_trajectory_estimations',
     'plot_heights_by_assignment',
-    'plot_raw_receiver_heights',
     'plot_assignment_quality',
     'plot_gmm_and_projections',
     'plot_trajectory_fitting',

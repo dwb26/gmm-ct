@@ -3,7 +3,6 @@ Publication-quality plotting functions for journal manuscripts.
 Creates high-resolution, publication-ready figures with consistent styling.
 """
 
-import logging
 
 from pathlib import Path
 
@@ -13,11 +12,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch
+from matplotlib.animation import FuncAnimation
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Ellipse, FancyBboxPatch
 from scipy.optimize import linear_sum_assignment
 
-logger = logging.getLogger(__name__)
 
 # Publication-quality settings
 mpl.rcParams['font.family'] = 'serif'
@@ -70,7 +69,6 @@ def match_estimated_to_true_gaussians(theta_true, theta_est, K):
 
     Returns a list of indices where matching_indices[k_est] = k_true
     """
-    import numpy as np
 
     cost_matrix = np.zeros((K, K))
 
@@ -152,13 +150,12 @@ def save_figure(fig, filename, dpi=DPI, bbox_inches='tight'):
     """Save figure with publication settings."""
     fig.savefig(filename, dpi=dpi, bbox_inches=bbox_inches, 
                 facecolor='white', edgecolor='none')
-    logger.info("✓ Saved: {filename}")
 
 
 
-'--------------------------------------------------------------------------------------------------------------------------'
-'--------------------------------------- FIGURE 2: INDIVIDUAL GAUSSIAN RECONSTRUCTION -------------------------------------'
-'--------------------------------------------------------------------------------------------------------------------------'
+# ======================================================================
+# --------------------------------------- FIGURE 2: INDIVIDUAL GAUSSIAN RECONSTRUCTION -------------------------------------
+# ======================================================================
 
 def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussian_indices=None,
                                            filename=None, resolution=256, theta_init=None):
@@ -187,14 +184,12 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
     - fig: Matplotlib figure object
     """
     # from ..core.reconstruction import GMM_reco
-    import numpy as np
     
     if d != 2:
         raise NotImplementedError("Image reconstruction comparison currently only supports 2D")
     
     # If K > 5, select the 5 worst approximations based on image reconstruction error
     if K > 5:
-        logger.info("K={K} > 5, selecting the 5 worst Gaussian approximations for plotting...")
         errors = []
         device = theta_true['alphas'][0].device
 
@@ -245,7 +240,6 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
         # Get the indices of the 5 Gaussians with the highest error
         worst_indices = np.argsort(errors)[-5:]
         gaussian_indices = sorted(worst_indices)
-        logger.info("Plotting worst 5 Gaussians (by MAE): {gaussian_indices}")
         K = 5 # We are now plotting 5 Gaussians
 
     # Select 3 most diverse Gaussians if not specified
@@ -286,8 +280,6 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
         selected.append(k)
         
         gaussian_indices = sorted(selected)
-        logger.info("Auto-selected most diverse Gaussians (by geometry): {gaussian_indices}")
-        logger.info("  Alphas: {[alphas[idx].item() if hasattr(alphas[idx], 'item') else alphas[idx] for idx in gaussian_indices]}")
     
     # Create figure: 5 rows when theta_init is provided, otherwise 3 rows.
     # 5-row layout: Simulated | Stage 1 Init | Init Error | Reconstruction | Recon Error
@@ -326,11 +318,9 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
             max_extent_size = max(max_extent_size, 1.0)
     common_extent = (-max_extent_size, max_extent_size, -max_extent_size, max_extent_size)
 
-    logger.info("\nReconstructing individual Gaussians centered at origin...")
     
     # Reconstruct each selected Gaussian
     for k in gaussian_indices:
-        logger.info("  Gaussian ρ_{k+1}...")
         
         # Extract parameters for this Gaussian
         alpha_true_k = theta_true['alphas'][k]
@@ -433,8 +423,6 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
     all_diff_imgs = images_diff + (images_init_diff if theta_init is not None else [])
     vmax_diff = max([vmin_diff + 1e-3] + [img.max() for img in all_diff_imgs])
 
-    logger.info("Gaussian value range: [0.00, {vmax_gauss:.2f}]")
-    logger.info("Log10 Difference value range: [{vmin_diff:.2f}, {vmax_diff:.2f}]")
 
     # base_axes[row] holds first column's ax for sharey;
     # cb_artists[row] holds (im, label) for colorbars, updated each col (last col wins).
@@ -535,14 +523,13 @@ def plot_individual_gaussian_reconstruction(theta_true, theta_est, K, d, gaussia
 
     if filename:
         save_figure(fig, filename)
-        logger.info("\n✓ Figure 2 (Individual Gaussian Reconstruction) saved: {filename}")
 
     return fig
 
 
-'--------------------------------------------------------------------------------------------------------------------------'
-'---------------------------------- FIGURE 3: TEMPORAL GMM COMPARISON (TRUE VS ESTIMATED) ---------------------------------'
-'--------------------------------------------------------------------------------------------------------------------------'
+# ======================================================================
+# ---------------------------------- FIGURE 3: TEMPORAL GMM COMPARISON (TRUE VS ESTIMATED) ---------------------------------
+# ======================================================================
 
 def plot_temporal_gmm_comparison(
     sources,
@@ -571,8 +558,6 @@ def plot_temporal_gmm_comparison(
         * None (defaults to 3 evenly spaced timestamps)
     """
     from ..model import GMM_reco
-    import numpy as np
-    import torch
 
     if d != 2:
         raise NotImplementedError(
@@ -596,18 +581,10 @@ def plot_temporal_gmm_comparison(
     n_times = len(time_indices)
     selected_times = t[time_indices]
 
-    logger.info(
-        "\nCreating Figure 3: Temporal GMM Comparison (Symmetric Layout)..."
-    )
-    logger.info(
-        f"Time points: {[f'{t_val.item():.3f}s' for t_val in selected_times]}"
-    )
-
     # Reorder estimated parameters to match true Gaussians
     theta_est_reordered, matching_indices = reorder_theta_to_match_true(
         theta_true, theta_est, K
     )
-    logger.info(f"Gaussian matching (est → true): {matching_indices}")
 
     # Determine spatial bounds if not provided
     if spatial_bounds is None:
@@ -897,9 +874,6 @@ def plot_temporal_gmm_comparison(
 
     if filename:
         save_figure(fig, filename)
-        logger.info(
-            f"\n✓ Figure 3 (Temporal GMM Comparison) saved: {filename}"
-        )
 
     return fig
 
@@ -947,9 +921,7 @@ def animate_gmm_with_joint_projection(
     -------
     anim : matplotlib FuncAnimation
     """
-    from matplotlib.animation import FuncAnimation
     from ..model import GMM_reco
-    import numpy as np
 
     if d != 2:
         raise NotImplementedError("animate_gmm_with_joint_projection only supports 2D")
@@ -1124,9 +1096,7 @@ def animate_gmm_with_joint_projection(
 
     if filename:
         fps_save = n_frames / (t_end - t_start)
-        logger.info("Saving animation to {filename}...")
         anim.save(filename, writer='ffmpeg', fps=fps_save, dpi=DPI // 2)
-        logger.info("\u2713 Animation saved: {filename}")
 
     return anim
 
@@ -1161,9 +1131,7 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     Returns:
     - anim: Matplotlib animation object
     """
-    from matplotlib.animation import FuncAnimation
     from ..model import GMM_reco
-    import numpy as np
     
     if d != 2:
         raise NotImplementedError("Temporal GMM animation currently only supports 2D")
@@ -1346,9 +1314,7 @@ def animate_temporal_gmm_comparison(sources, receivers, theta_true, theta_est,
     # Save animation
     if filename:
         fps_save = n_frames / (t_end - t_start)
-        logger.info("Saving animation to {filename}...")
         anim.save(filename, writer='ffmpeg', fps=fps_save, dpi=DPI//2)
-        logger.info("✓ Animation saved: {filename}")
     
     return anim
 
@@ -1358,7 +1324,6 @@ def plot_gmm_snapshot_animated(ax, theta, t_val, K, d, colors, artists,
     """
     Plot GMM snapshot and add artists to the provided list for animation.
     """
-    import numpy as np
     
     chi2_vals = [1.0, 4.0, 9.0]
     linestyle = '-'
@@ -1539,7 +1504,6 @@ def plot_acquisition_geometry_exact(sources, receivers, d, filename=None):
 
     if filename:
         save_figure(fig, filename)
-        logger.info("Acquisition geometry figure saved: %s", filename)
 
     return fig
 
@@ -1556,7 +1520,6 @@ def plot_trajectories_single(ax, theta, t, K, colors, mirror=False):
     - colors: Color array
     - mirror: If True, flip x-coordinates for mirrored view
     """
-    import numpy as np
     
     for k in range(K):
         x0 = theta['x0s'][k].detach().cpu().numpy()
@@ -1582,7 +1545,6 @@ def plot_trajectories(ax, theta_true, theta_est, t, K, colors):
     """
     Plot trajectory paths for both true and estimated GMMs.
     """
-    import numpy as np
     
     # True trajectories - thin solid lines
     for k in range(K):
@@ -1637,7 +1599,6 @@ def plot_gmm_snapshot(ax, theta, t_val, K, d, colors, is_true=True, show_centroi
     - show_centroids: Whether to mark centroids
     - mirror: If True, flip x-coordinates for mirrored view
     """
-    import numpy as np
     
     # Confidence levels (1σ, 2σ, 3σ equivalent in 2D)
     chi2_vals = [1.0, 4.0, 9.0]  # Chi-squared values for 2D Gaussian
@@ -1756,9 +1717,9 @@ def plot_gaussian_ellipse(ax, mu, Sigma, facecolor='blue', edgecolor=None,
     ax.add_patch(ellipse)
 
 
-'--------------------------------------------------------------------------------------------------------------------------'
-'--------------------------------------- FIGURE 4: PARAMETER RECOVERY COMPARISON ------------------------------------------'
-'--------------------------------------------------------------------------------------------------------------------------'
+# ======================================================================
+# --------------------------------------- FIGURE 4: PARAMETER RECOVERY COMPARISON ------------------------------------------
+# ======================================================================
 
 def plot_parameter_recovery(theta_true, theta_est, K, filename=None, 
                             title="Parameter Recovery"):
@@ -1862,9 +1823,9 @@ def plot_parameter_recovery(theta_true, theta_est, K, filename=None,
     return fig
 
 
-'--------------------------------------------------------------------------------------------------------------------------'
-'------------------------------------------ FIGURE 3: ERROR ANALYSIS ------------------------------------------------------'
-'--------------------------------------------------------------------------------------------------------------------------'
+# ======================================================================
+# ------------------------------------------ FIGURE 3: ERROR ANALYSIS ------------------------------------------------------
+# ======================================================================
 
 def plot_error_analysis(theta_true, theta_est, K, filename=None,
                         title="Parameter Recovery Errors"):
@@ -1941,9 +1902,9 @@ def plot_error_analysis(theta_true, theta_est, K, filename=None,
     return fig
 
 
-'--------------------------------------------------------------------------------------------------------------------------'
-'----------------------------------------- FIGURE 4: SINOGRAM COMPARISON --------------------------------------------------'
-'--------------------------------------------------------------------------------------------------------------------------'
+# ======================================================================
+# ----------------------------------------- FIGURE 4: SINOGRAM COMPARISON --------------------------------------------------
+# ======================================================================
 
 def plot_sinogram_comparison(proj_data, proj_est, t, receivers, filename=None,
                              title="Projection Data Comparison"):
@@ -2016,9 +1977,9 @@ def plot_sinogram_comparison(proj_data, proj_est, t, receivers, filename=None,
     return fig
 
 
-'--------------------------------------------------------------------------------------------------------------------------'
-'-------------------------------------- FIGURE 5: TRAJECTORY COMPARISON ---------------------------------------------------'
-'--------------------------------------------------------------------------------------------------------------------------'
+# ======================================================================
+# -------------------------------------- FIGURE 5: TRAJECTORY COMPARISON ---------------------------------------------------
+# ======================================================================
 
 def plot_trajectory_comparison(theta_true, theta_est, t, K, sources, receivers, d,
                                 filename=None, title="Trajectory Reconstruction"):
@@ -2099,9 +2060,9 @@ def plot_trajectory_comparison(theta_true, theta_est, t, K, sources, receivers, 
     return fig, ax
 
 
-'--------------------------------------------------------------------------------------------------------------------------'
-'--------------------------------------- COMBINED PUBLICATION FIGURE ------------------------------------------------------'
-'--------------------------------------------------------------------------------------------------------------------------'
+# ======================================================================
+# --------------------------------------- COMBINED PUBLICATION FIGURE ------------------------------------------------------
+# ======================================================================
 
 def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K, 
                               sources, receivers, d, output_dir, prefix=""):
@@ -2124,18 +2085,13 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     Returns:
     - Dictionary of figure objects
     """
-    from pathlib import Path
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     figures = {}
     
-    logger.info("\n" + "="*70)
-    logger.info("Creating Publication-Quality Figures")
-    logger.info("="*70)
     
     # Figure 1: Acquisition geometry
-    logger.info("\n[1/5] Acquisition Geometry...")
     fig1 = plot_figure1_experimental_setup(
         sources, receivers, theta_true, t, K, d,
         filename=output_dir / f"{prefix}fig1_experimental_setup.pdf",
@@ -2144,7 +2100,6 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     figures['geometry'] = fig1
     
     # Figure 2: Parameter recovery
-    logger.info("[2/5] Parameter Recovery...")
     fig2 = plot_parameter_recovery(
         theta_true, theta_est, K,
         filename=output_dir / f"{prefix}fig2_parameter_recovery.pdf",
@@ -2153,7 +2108,6 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     figures['parameters'] = fig2
     
     # Figure 3: Error analysis
-    logger.info("[3/5] Error Analysis...")
     fig3 = plot_error_analysis(
         theta_true, theta_est, K,
         filename=output_dir / f"{prefix}fig3_error_analysis.pdf",
@@ -2162,7 +2116,6 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     figures['errors'] = fig3
     
     # Figure 4: Sinogram comparison
-    logger.info("[4/5] Sinogram Comparison...")
     fig4 = plot_sinogram_comparison(
         proj_data, proj_est, t, receivers,
         filename=output_dir / f"{prefix}fig4_sinogram_comparison.pdf",
@@ -2171,7 +2124,6 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     figures['sinogram'] = fig4
     
     # Figure 5: Trajectory comparison
-    logger.info("[5/5] Trajectory Comparison...")
     fig5, _ = plot_trajectory_comparison(
         theta_true, theta_est, t, K, sources, receivers, d,
         filename=output_dir / f"{prefix}fig5_trajectory_comparison.pdf",
@@ -2179,10 +2131,6 @@ def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K,
     )
     figures['trajectories'] = fig5
     
-    logger.info("\n" + "="*70)
-    logger.info("✓ All publication figures created successfully!")
-    logger.info("✓ Saved to: {output_dir}")
-    logger.info("="*70 + "\n")
     
     # Figure 6
     
@@ -2450,7 +2398,7 @@ def plot_projection_modes(
         if col % 2 == 1:      # right column: suppress y-tick labels
             ax.tick_params(labelleft=False)
 
-    [snap_ax.legend(fontsize=_FS_LEGEND, loc='upper left') for snap_ax in snap_axes]
+    # [snap_ax.legend(fontsize=_FS_LEGEND, loc='upper left') for snap_ax in snap_axes]
 
     # ------------------------------------------------------------------
     # Modes-vs-time panel
@@ -2514,7 +2462,7 @@ def plot_projection_modes(
     if title is not None:
         fig.suptitle(title, fontweight='bold', fontsize=_FS_SUPTITLE)
 
-    plt.tight_layout()
+    # plt.tight_layout()
     if filename:
         save_figure(fig, filename)
     return fig

@@ -1,15 +1,11 @@
 """Animation utilities for GMM-CT reconstruction."""
 
-import logging
-
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Circle, Ellipse
-
-logger = logging.getLogger(__name__)
 
 
 def _setup_figure_and_axes():
@@ -91,6 +87,8 @@ def _get_gaussian_parameters(theta_true, k):
 
 def _compute_precision_matrix(theta_true, k, current_time, sources, rcvrs, d, K):
     """Compute the precision matrix for the k-th Gaussian at current time."""
+    from ..model import GMM_reco
+
     # Get rotation matrices
     # Extract x0s and a0s from theta_true (they are known physical parameters)
     x0s = theta_true['x0s']
@@ -171,360 +169,6 @@ def _plot_acquisition_geometry_in_animation(ax, sources, receivers, d, view_type
                            color='gold', linewidth=0.5, alpha=0.6, zorder=1)
 
 
-
-
-
-'--------------------------------------------------------------------------------------------------------------------------'
-'----------------------------------------------- ESTIMATION ANIMATIONS ----------------------------------------------------'
-'--------------------------------------------------------------------------------------------------------------------------'                
-def _plot_gaussians_along_trajectory(ax, trajectories, theta, t, K, sources, rcvrs, d, colors, style='true', view_type=None):
-    """
-    Plot Gaussian ellipses at multiple time points along the entire trajectory.
-    
-    Parameters:
-    - ax: The axes object to plot on
-    - trajectories: List of trajectory tensors for each Gaussian
-    - theta: Parameter dictionary containing Gaussian parameters
-    - t: Array of time points
-    - K: Number of Gaussians
-    - sources, rcvrs: Source and receiver geometries
-    - d: Dimensionality
-    - colors: Color array for each Gaussian
-    - style: 'true' or 'estimated' for styling
-    - view_type: For 3D, specify "yz" or "xy" projections
-    """
-    # Sample time points to avoid overcrowding
-    n_time_samples = min(10, len(t))  # Maximum 10 ellipses per trajectory
-    time_indices = np.linspace(0, len(t)-1, n_time_samples, dtype=int)
-    
-    for k in range(K):
-        for i, time_idx in enumerate(time_indices):
-            current_pos = trajectories[k][time_idx]
-            center = np.array([current_pos[0].item(), current_pos[1].item()])
-            
-            # Get Gaussian parameters
-            alpha_k = _get_gaussian_parameters(theta, k)
-            precision_mat = _compute_precision_matrix(theta, k, t[time_idx], 
-                                                    sources, rcvrs, d, K)
-            
-            # Convert precision matrix to covariance matrix
-            try:
-                covariance_mat = np.linalg.inv(precision_mat)
-                if view_type == "yz" and d == 3:
-                    covariance_mat = covariance_mat[1:3, 1:3]
-                elif view_type == "xy" and d == 3:
-                    covariance_mat = covariance_mat[0:2, 0:2]
-                
-                # Compute eigenvalues and eigenvectors for ellipse parameters
-                eigenvals, eigenvecs = np.linalg.eigh(covariance_mat)
-                eigenvals = np.abs(eigenvals)  # Ensure positive
-                
-                # Use only the outermost confidence level for trajectory visualization
-                chi2_val = 4.0  # ~2σ equivalent
-                
-                # Ellipse dimensions
-                width = 2 * np.sqrt(chi2_val * eigenvals[0])
-                height = 2 * np.sqrt(chi2_val * eigenvals[1])
-                
-                # Rotation angle in degrees
-                angle = np.degrees(np.arctan2(eigenvecs[1, 0], eigenvecs[0, 0]))
-                
-                # Alpha scaling based on time position (earlier times more faded)
-                time_factor = (i + 1) / n_time_samples  # 0.125 to 1.0
-                alpha_scale = alpha_k.item() if isinstance(alpha_k, torch.Tensor) else alpha_k
-                ellipse_alpha = min(0.6, max(0.1, alpha_scale * time_factor * 0.4))
-                
-                # Adjust style based on whether this is true or estimated
-                if style == 'estimated':
-                    ellipse_alpha *= 0.8    # Make estimated ellipses more transparent
-                    edge_style = '--'       # Dashed edges for estimates
-                    line_width = 0.8
-                else:
-                    edge_style = '-'        # Solid edges for true
-                    line_width = 1.0
-                
-                # Only label the final ellipse in the trajectory
-                if i == len(time_indices) - 1:
-                    if d == 2:
-                        label_prefix = 'Est G' if style == 'estimated' else 'G'
-                        label = f'{label_prefix}{k+1}: '
-                        rots_per_second = theta['omegas'][k].item()
-                        label = label + f'{rots_per_second:.2f} rots/s'
-                    elif d == 3:
-                        label_prefix = 'Est G' if style == 'estimated' else 'G'
-                        label = f'{label_prefix}{k+1}: '
-                        if view_type == "yz":
-                            yz_rots_per_second = theta['omegas'][k][2].item()
-                            label = label + f"{yz_rots_per_second:.2f} rots/s"
-                        elif view_type == "xy":
-                            xy_rots_per_second = theta['omegas'][k][0].item()
-                            label = label + f"{xy_rots_per_second:.2f} rots/s"
-                else:
-                    label = None
-                    
-                # Create and add ellipse
-                ellipse = Ellipse(center, width, height, angle=angle, 
-                                facecolor=colors[k], edgecolor='black',
-                                alpha=ellipse_alpha, linewidth=line_width,
-                                linestyle=edge_style, label=label)
-                ax.add_patch(ellipse)
-                
-            except (np.linalg.LinAlgError, IndexError, KeyError):
-                # Fallback for ill-conditioned matrices or parameter issues
-                radius = 0.05 * np.sqrt(alpha_k.item() if isinstance(alpha_k, torch.Tensor) else alpha_k)
-                alpha_fallback = 0.3 if style == 'estimated' else 0.4
-                circle = Circle(center, radius, facecolor=colors[k], 
-                              edgecolor='black', alpha=alpha_fallback,
-                              label=f'Gaussian {k+1}' if i == len(time_indices) - 1 else None)
-                ax.add_patch(circle)
-    
-
-def animate_GMM_evolution(theta_hat, theta_true, d, K, sources, rcvrs, t, 
-                         show_trajectory=True, show_gaussians=True, show_acquisition_geometry=True,
-                         frames_per_iteration=10, pause_frames=5):
-    """
-    Creates an animation showing the evolution of Gaussian mixture model parameters through optimization iterations.
-    
-    Parameters:
-    - theta_hat: List of parameter dictionaries from optimization iterations.
-    - theta_true: Dictionary containing the true parameters of the GMM.
-    - d: Dimensionality of the application (2 or 3).
-    - K: Number of Gaussians in the GMM.
-    - sources, rcvrs: Source and receiver geometries for the GMM.
-    - t: Array of time points for animation frames.
-    - show_trajectory: Whether to show the trajectory trails (default: True).
-    - show_gaussians: Whether to show Gaussian visualization (default: True).
-    - show_acquisition_geometry: Whether to show acquisition geometry (default: True).
-    - frames_per_iteration: Number of frames to show each iteration (default: 10).
-    - pause_frames: Number of frames to pause at the end of each iteration (default: 5).
-    
-    Returns:
-    - anim: The animation object.
-    
-    Notes:
-    - Shows the evolution of Gaussian parameters through optimization iterations
-    - Each iteration is displayed for multiple frames with a pause between iterations
-    - True parameters are shown in solid lines, current estimate in dashed lines
-    - Final estimate is highlighted differently
-    """
-    
-    if not theta_hat or len(theta_hat) == 0:
-        raise ValueError("theta_hat must contain at least one parameter dictionary")
-    
-    '-------------'
-    # Setup figure
-    '-------------'
-    if d == 2:
-        fig, ax = _setup_figure_and_axes()
-        
-        # Calculate bounds
-        x_min = sources[0][0].item() - 0.5
-        all_rcvr_x_coords = [rcvr[0].item() for rcvr in rcvrs[0]]
-        x_max = max(all_rcvr_x_coords) + 0.5
-        
-        all_rcvr_y_coords = [rcvr[1].item() for rcvr in rcvrs[0]]
-        y_max = max(all_rcvr_y_coords) + 0.5
-        y_min = min(all_rcvr_y_coords) - 0.5
-        
-    elif d == 3:
-        fig_yz, ax_yz = _setup_figure_and_axes()
-        fig_xy, ax_xy = _setup_figure_and_axes()
-    else:
-        raise ValueError("Only 2D and 3D are currently supported")
-    
-    
-    '-----------------------------------------------------'
-    # Compute all trajectories for each parameter estimate
-    '-----------------------------------------------------'
-    trajectories_evolution = []
-    for theta in theta_hat:
-        if d == 2:
-            traj = _compute_trajectories(theta, K, d, t)
-            trajectories_evolution.append(traj)
-        elif d == 3:
-            traj, traj_yz, traj_xy = _compute_trajectories(theta, K, d, t)
-            trajectories_evolution.append((traj, traj_yz, traj_xy))
-    
-    '----------------------------'
-    # Compute the true trajectory
-    '----------------------------'
-    if d == 2:
-        true_trajectories = _compute_trajectories(theta_true, K, d, t)
-    elif d == 3:
-        true_trajectories, true_trajectories_yz, true_trajectories_xy = _compute_trajectories(theta_true, K, d, t)
-    
-    # Setup colors
-    colors = cm.rainbow(np.linspace(0, 1, K))
-    # colors = ["blue", "red", "green"]
-    
-    # Calculate total frames
-    n_iterations = len(theta_hat)
-    total_frames = n_iterations * (frames_per_iteration + pause_frames)
-    
-    def animate(frame):
-        """Animation function called for each frame."""
-        # Determine which iteration we're showing
-        iteration_idx = frame // (frames_per_iteration + pause_frames)
-        iteration_idx = min(iteration_idx, n_iterations - 1)  # Clamp to valid range
-        
-        # Determine if we're in pause phase
-        frame_in_iteration = frame % (frames_per_iteration + pause_frames)
-        is_paused = frame_in_iteration >= frames_per_iteration
-        
-        current_theta = theta_hat[iteration_idx]
-        # print(f"Animating frame {frame+1}/{total_frames}, Iteration {iteration_idx + 1}/{n_iterations}")
-        
-        if d == 2:
-            ax.clear()
-            
-            '------------------'
-            # Plot trajectories
-            '------------------'
-            # Plot true trajectories (faded)
-            if show_trajectory:
-                _plot_trajectories(ax, true_trajectories, len(t) - 1, colors, d, style='true')
-                for line in ax.lines:
-                    line.set_alpha(0.3)
-            
-            # Plot current iteration trajectory
-            if show_trajectory and iteration_idx < len(trajectories_evolution):
-                current_trajectories = trajectories_evolution[iteration_idx]
-                _plot_trajectories(ax, current_trajectories, len(t) - 1, colors, d, style='estimated')
-            
-            '---------------'
-            # Plot Gaussians
-            '---------------'
-            if show_gaussians:
-                # True Gaussians along trajectory (faded)
-                _plot_gaussians_along_trajectory(ax, true_trajectories, theta_true, t, K, sources, rcvrs, d, colors, style='true')
-                for patch in ax.patches:
-                    patch.set_alpha(0.15)
-                
-                # Current iteration estimated Gaussians along trajectory
-                if iteration_idx < len(trajectories_evolution):
-                    current_trajectories = trajectories_evolution[iteration_idx]
-                    _plot_gaussians_along_trajectory(ax, current_trajectories, current_theta, t, K, sources, rcvrs, d, colors, style='estimated')
-            
-            # Plot acquisition geometry
-            if show_acquisition_geometry:
-                _plot_acquisition_geometry_in_animation(ax, sources, rcvrs, d)
-            
-            # Update plot aesthetics
-            ax.set_xlim(x_min, x_max)
-            ax.set_ylim(y_min, y_max)
-            
-            # Add legend to distinguish between true and estimated parameters
-            if show_gaussians and iteration_idx < len(trajectories_evolution):
-                
-                from matplotlib.patches import Patch
-                legend_elements = [
-                    # Patch(edgecolor='black', alpha=0.3, linestyle='-', label='True Gaussians'),
-                    # Patch(edgecolor='black', label='True Gaussians'),
-                    # Patch(facecolor=colors[k], edgecolor='black', alpha=0.3, linestyle='-', label='True Gaussians'),
-                # legend_elements = [
-                ]
-                if show_trajectory:
-                    from matplotlib.lines import Line2D
-                    legend_elements.extend([
-                        Line2D([0], [0], color='gray', alpha=0.5, linestyle='-', label='True traj', lw=2),
-                        Line2D([0], [0], color='gray', alpha=0.8, linestyle='--', label='Est. traj', lw=2)
-                    ])
-                
-                # ax.legend(handles=legend_elements, loc='upper left', fontsize=8, framealpha=0.8, fancybox=True, shadow=True)
-            
-            # Add iteration information
-            is_final = iteration_idx == n_iterations - 1
-            status = "FINAL" if is_final else f"Iteration {iteration_idx + 1}/{n_iterations}"
-            if is_paused:
-                status += " (PAUSED)"
-            
-            ax.set_title(f'GMM Evolution - {status}', fontsize=22, fontweight='bold', pad=15)
-            ax.set_xlabel('X Position', fontsize=20, fontweight='bold')
-            ax.set_ylabel('Y Position', fontsize=20, fontweight='bold')
-            ax.tick_params(labelsize=16)
-            
-        return []
-    
-    # Create animation
-    if d == 2:
-        anim = FuncAnimation(fig, animate, frames=total_frames, interval=200, repeat=True, blit=False)
-        return anim
-    elif d == 3:
-        anim_yz = FuncAnimation(fig_yz, animate, frames=total_frames, interval=200, repeat=True, blit=False)
-        anim_xy = FuncAnimation(fig_xy, animate, frames=total_frames, interval=200, repeat=True, blit=False)
-        return anim_yz, anim_xy
-
-
-def save_GMM_evolution_animation(theta_hat, theta_true, d, K, sources, rcvrs, t,
-                                filename='gmm_evolution.mp4', show_trajectory=True, show_gaussians=True,
-                                show_acquisition_geometry=True, frames_per_iteration=10, pause_frames=5, fps=18):
-    """
-    Creates and saves an animation showing the evolution of GMM parameters through optimization iterations.
-    
-    Parameters:
-    - theta_hat: List of parameter dictionaries from optimization iterations.
-    - theta_true: Dictionary containing the true parameters of the GMM.
-    - d: Dimensionality of the application (2 or 3).
-    - K: Number of Gaussians in the GMM.
-    - sources, rcvrs: Source and receiver geometries for the GMM.
-    - t: Array of time points for animation frames.
-    - filename: Output filename for the animation (default: 'gmm_evolution.mp4').
-    - show_trajectory: Whether to show the trajectory trails (default: True).
-    - show_gaussians: Whether to show Gaussian ellipses/spheres (default: True).
-    - show_acquisition_geometry: Whether to show acquisition geometry (default: True).
-    - frames_per_iteration: Number of frames to show each iteration (default: 10).
-    - pause_frames: Number of frames to pause at the end of each iteration (default: 5).
-    - fps: Frames per second for the saved animation (default: 18).
-    """
-    if d == 2:
-        anim = animate_GMM_evolution(theta_hat, theta_true, d, K, sources, rcvrs, t,
-                                   show_trajectory=show_trajectory, show_gaussians=show_gaussians,
-                                   show_acquisition_geometry=show_acquisition_geometry,
-                                   frames_per_iteration=frames_per_iteration, pause_frames=pause_frames)
-        # Save animation
-        if filename.endswith('.gif'):
-            anim.save(filename, writer='pillow', fps=fps)
-        elif filename.endswith('.mp4'):
-            anim.save(filename, writer='ffmpeg', fps=fps)
-        else:
-            # Default to gif
-            anim.save(filename + '.gif', writer='pillow', fps=fps)
-        
-        logger.info("Evolution animation saved as {filename}")
-        logger.info("- Shows {len(theta_hat)} optimization iterations")
-        logger.info("- True parameters shown faded in background")
-        logger.info("- Current iteration parameters highlighted")
-        return anim
-    elif d == 3:
-        anim_yz, anim_xy = animate_GMM_evolution(theta_hat, theta_true, d, K, sources, rcvrs, t,
-                                               show_trajectory=show_trajectory, show_gaussians=show_gaussians,
-                                               show_acquisition_geometry=show_acquisition_geometry,
-                                               frames_per_iteration=frames_per_iteration, pause_frames=pause_frames)
-        # Save animations
-        if filename.endswith('.gif'):
-            anim_yz.save(filename.replace('.gif', '_yz.gif'), writer='pillow', fps=fps)
-            anim_xy.save(filename.replace('.gif', '_xy.gif'), writer='pillow', fps=fps)
-        elif filename.endswith('.mp4'):
-            anim_yz.save(filename.replace('.mp4', '_yz.mp4'), writer='ffmpeg', fps=fps)
-            anim_xy.save(filename.replace('.mp4', '_xy.mp4'), writer='ffmpeg', fps=fps)
-        else:
-            # Default to gif
-            anim_yz.save(filename + '_yz.gif', writer='pillow', fps=fps)
-            anim_xy.save(filename + '_xy.gif', writer='pillow', fps=fps)
-        
-        base_name = filename.replace('.gif', '').replace('.mp4', '')
-        logger.info("Evolution animations saved as {base_name}_yz and {base_name}_xy")
-        logger.info("- Shows {len(theta_hat)} optimization iterations")
-        logger.info("- True parameters shown faded in background")
-        logger.info("- Current iteration parameters highlighted")
-        return anim_yz, anim_xy
-    
-
-
-
-'--------------------------------------------------------------------------------------------------------------------------'
-'------------------------------------------------ ORIGINAL MOTION CODE ----------------------------------------------------'
-'--------------------------------------------------------------------------------------------------------------------------'
 def _plot_gaussian_ellipses(ax, trajectories, frame, theta_true, 
                           current_time, K, sources, rcvrs, d, colors, view_type=None, style='true'):
     """Plot Gaussian ellipses for all Gaussians at the current frame."""
@@ -937,12 +581,7 @@ def save_GMM_animation(theta_true, d, K, sources, rcvrs, t, projs_by_source,
         else:
             # Default to gif
             anim.save(filename + '.gif', writer='pillow', fps=fps)
-    
-        logger.info("Animation saved as {filename}")
-        if show_estimates and theta_hat is not None:
-            logger.info("- Animation includes both true and estimated GMM parameters")
-            logger.info("- True parameters shown with solid lines")
-            logger.info("- Estimated parameters shown with dashed lines")
+
         return anim
     elif d == 3:
         anim_yz, anim_xy = animate_GMM_motion(theta_true, d, K, sources, rcvrs, t, projs_by_source, 
@@ -962,12 +601,6 @@ def save_GMM_animation(theta_true, d, K, sources, rcvrs, t, projs_by_source,
             anim_yz.save(filename + '_yz.gif', writer='pillow', fps=fps)
             anim_xy.save(filename + '_xy.gif', writer='pillow', fps=fps)
         
-        base_name = filename.replace('.gif', '').replace('.mp4', '')
-        logger.info("Animations saved as {base_name}_yz and {base_name}_xy")
-        if show_estimates and theta_hat is not None:
-            logger.info("- Animations include both true and estimated GMM parameters")
-            logger.info("- True parameters shown with solid lines")
-            logger.info("- Estimated parameters shown with dashed lines")
         return anim_yz, anim_xy
 
 
@@ -1049,7 +682,6 @@ def animate_projection_comparison(proj_data, sim_projs, t, sources, receivers, d
             if true_proj_frame.ndim > 1:
                 true_proj_frame = true_proj_frame.flatten()
             if len(true_proj_frame) != len(y_positions):
-                logger.warning("true_proj_frame shape %s doesn't match y_positions shape %s", true_proj_frame.shape, y_positions.shape)
                 return
                 
             # Sort receiver positions from lowest to highest for plotting
@@ -1093,14 +725,12 @@ def animate_projection_comparison(proj_data, sim_projs, t, sources, receivers, d
                 elif sim_data.ndim == 1:
                     sim_proj_frame = sim_data
                 else:
-                    logger.warning("Unexpected sim_data dimensions: %s", sim_data.shape)
                     return
                 
                 # Ensure sim_proj_frame is 1D with correct length
                 if sim_proj_frame.ndim > 1:
                     sim_proj_frame = sim_proj_frame.flatten()
                 if hasattr(sim_proj_frame, '__len__') and len(sim_proj_frame) != len(y_positions):
-                    logger.warning("sim_proj_frame shape %s doesn't match y_positions shape %s", sim_proj_frame.shape, y_positions.shape)
                     return
                     
                 # Sort simulated projection data to match receiver position ordering
@@ -1224,18 +854,12 @@ def save_projection_comparison_animation(proj_data, sim_projs, t, sources, recei
         # Default to gif
         anim.save(filename + '.gif', writer='pillow', fps=fps)
     
-    logger.info("📽️  Projection comparison animation saved as {filename}")
-    logger.info("   - Continuous animation: All optimization iterations from start to finish")
-    logger.info("   - Left: True projections, Right: Current iteration projections")
-    logger.info("   - Total frames: {len(sim_projs) * len(t)} ({len(sim_projs)} iterations × {len(t)} time points)")
-    logger.info("   - FPS: {fps}")
-    
     return anim
 
 
-'--------------------------------------------------------------------------------------------------------------------------'
-'----------------------------------------- COMBINED GMM AND PROJECTION ANIMATION ------------------------------------------'
-'--------------------------------------------------------------------------------------------------------------------------'
+# ======================================================================
+# ----------------------------------------- COMBINED GMM AND PROJECTION ANIMATION ------------------------------------------
+# ======================================================================
 def animate_GMM_with_projection_comparison(theta_true, d, K, sources, rcvrs, t, proj_data, sim_projs,
                                           title="GMM Animation with Projection Comparison",
                                           show_trajectory=True, show_gaussians=True, 
@@ -1502,20 +1126,12 @@ def save_GMM_with_projection_comparison(theta_true, d, K, sources, rcvrs, t, pro
         # Default to gif
         anim.save(filename + '.gif', writer='pillow', fps=fps)
     
-    logger.info("📽️  Combined GMM and projection animation saved as {filename}")
-    logger.info("   - Top row: GMM motion (left) and projection data (right)")
-    logger.info("   - Bottom row: Projection comparison across iterations")
-    logger.info("   - All synchronized to the same time frames")
-    if show_estimates and theta_hat is not None:
-        logger.info("   - Animation includes both true and estimated GMM parameters")
-        logger.info("   - True parameters shown with solid lines, estimated with dashed lines")
-    
     return anim
 
 
-'--------------------------------------------------------------------------------------------------------------------------'
-'--------------------------------- OPTIMIZATION STAGES ANIMATION ----------------------------------------------------------'
-'--------------------------------------------------------------------------------------------------------------------------'
+# ======================================================================
+# --------------------------------- OPTIMIZATION STAGES ANIMATION ----------------------------------------------------------
+# ======================================================================
 def animate_optimization_stages(theta_true, theta_init, theta_after_traj, theta_final,
                                 d, K, sources, rcvrs, t, proj_data, 
                                 proj_init, proj_after_traj, proj_final,
@@ -1858,50 +1474,5 @@ def save_optimization_stages_animation(theta_true, theta_init, theta_after_traj,
         # Default to gif
         anim.save(filename + '.gif', writer='pillow', fps=fps)
     
-    logger.info("📽️  Optimization stages animation saved as {filename}")
-    logger.info("   - Left: GMM with true (solid) and final estimate (dashed)")
-    logger.info("   - Right top: Initial projections (before trajectory opt)")
-    logger.info("   - Right middle: After trajectory optimization")
-    logger.info("   - Right bottom: Final projections (after all optimization)")
-    logger.info("   - All synchronized to the same time frames")
-    
     return anim
 
-
-# Test for derivative plot
-# import matplotlib.pyplot as plt
-# s = sources[0]
-# x0_k, v0_k, a0_k = theta_true['x0s'][0], theta_true['v0s'][0], theta_true['a0s'][0]
-# sample_ind = N_projs // 3
-# sample_time = t[sample_ind]
-# c_k = s - x0_k - v0_k * sample_time - 0.5 * a0_k * sample_time**2
-# s1, s2 = s[0], s[1]
-# df_dr2 = torch.empty(n_rcvrs, dtype=torch.float64, device=device)
-# rcvr_heights = torch.zeros(n_rcvrs, dtype=torch.float64, device=device)
-# for n_r, r in enumerate(rcvrs[0]):
-#     r1, r2 = r[0], r[1]
-#     h_k = (r1 - s1) * c_k[0] - s2 * c_k[1]
-#     R_k_l = 2 * ((r1 - s1)**2 + (r2 - s2)**2) * c_k[1] * (c_k[1] * r2 + h_k)
-#     R_k_r = -2 * (r2 - s2) * (c_k[1] * r2 + h_k) ** 2
-#     denom = ((r1 - s1) ** 2 + (r2 - s2) ** 2) ** 2
-#     R = (R_k_l + R_k_r) / denom
-#     f = proj_data[0][sample_ind][n_r]
-#     df_dr2[n_r] = R * f
-#     rcvr_heights[n_r] = r2
-# fig, ax = plt.subplots()
-# ax.plot(rcvr_heights.cpu(), df_dr2.cpu())
-# ax.set_title("Derivative of projection data at time {:.2f}s".format(sample_time.item()))
-# ax.set_xlabel("Receiver position (m)")
-# ax.set_ylabel("Derivative of projection data")
-# plt.show()
-
-
-# for n, proj_n in enumerate(proj_data[0]):
-#     t_n = t[n]
-#     plt.figure(figsize=(8, 5))
-#     plt.plot(rcvr_heights.cpu(), proj_n.cpu(), label="True projection", color='black')
-#     proj_k_n = GMM.generate_projections([t_n], theta_hat[-1], loss_type=None)[0][0]
-#     plt.plot(rcvr_heights.cpu(), proj_k_n.detach().numpy(), label='Model Projection')
-#     plt.title(f"Projection at time {t[n].item()} for v0 {theta_hat[0]["v0s"][0].cpu().detach().numpy()}")
-#     plt.legend()
-#     plt.show()

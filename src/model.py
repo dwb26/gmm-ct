@@ -38,10 +38,8 @@ class GMM_reco:
         omega_max: float,                       # Maximum angular velocity (Hz).
         exp_dir: str,                           # Directory for diagnostic plots.
         device: str = "cpu",                    # Computation device (auto-detected when None).
-        n_traj_trials: int | None = None,       # Multi-start trials for Stage 1 (default: max(20, 2·N)).
-        n_omega_inits: int | None = None,       # Multi-start trials for Stage 2 (default: 5).
         save_diagnostics: bool = True,          # Save diagnostic plots at the end of Stage 1
-        fitted_gaussian_peaks: dict[float, torch.Tensor] | None = None,
+        fitted_gaussian_params: dict[float, torch.Tensor] | None = None,
         peak_detection_records: pd.DataFrame | None = None,
     ):
         self.d = d
@@ -50,11 +48,11 @@ class GMM_reco:
         self.a0s = a0s
         self.omega_min = omega_min
         self.omega_max = omega_max
-        self.n_traj_trials = n_traj_trials
-        self.n_omega_inits = n_omega_inits
+        self.n_traj_trials = 5 * N
+        self.n_omega_inits = 5 * N
         self.save_diagnostics = save_diagnostics
         self.t_observable = []
-        self.fitted_gaussian_peaks = fitted_gaussian_peaks
+        self.fitted_gaussian_params = fitted_gaussian_params
         self.peak_detection_records = peak_detection_records
 
         # Device
@@ -107,9 +105,7 @@ class GMM_reco:
             omega_min=omega_min,
             omega_max=omega_max,
             device=device,
-            exp_dir=cfg.output.directory,
-            n_traj_trials=cfg.reconstruction.n_trajectory_trials,
-            n_omega_inits=cfg.reconstruction.n_omega_inits,
+            exp_dir=cfg.exp_dir,
             save_diagnostics=cfg.output.save_plots,
         )
 
@@ -268,9 +264,9 @@ class GMM_reco:
         logger.info("Running %d trajectory multi-start trials", n_traj_trials)
 
         errors, results = [], []
-        for n_trial in range(n_traj_trials):
-            logger.info("Trial %d/%d", n_trial + 1, n_traj_trials)
-            self.theta_dict_init = self.initialize_parameters(t, proj_data)
+        self.peak_detection(t, proj_data)
+        for _ in range(n_traj_trials):
+            self.theta_dict_init = self.initialize_parameters()
             for v0_n in self.theta_dict_init["v0s"]:
                 v0_n.requires_grad_(True)
 
@@ -295,7 +291,6 @@ class GMM_reco:
             )
 
         soln_dict["v0s"] = [v0_n.clone().detach() for v0_n in soln_dict["v0s"]]
-        logger.info(f"The estimates v0s are {soln_dict["v0s"]}")
         
         if self.save_diagnostics:
             self._plot_stage1_diagnostics(best_res)
@@ -306,19 +301,15 @@ class GMM_reco:
         soln_dict["alphas"] = [alpha.clone().detach() for alpha in self.theta_dict_init["alphas"]]
         soln_dict["U_skews"] = self.initialize_anisotropic_U_skews(soln_dict["v0s"])
 
-        return soln_dict
+        return soln_dict        
     
     # ==================================================================
     # Initialization Routines
     # ==================================================================
     
-    def initialize_parameters(
-        self, 
-        t: torch.Tensor, 
-        proj_data: list[torch.Tensor],
-    ) -> None:
+    def initialize_parameters(self) -> None:
         """Initialize all GMM parameters before Stage 1 optimization."""
-        v0s = self.initialize_initial_velocities(t, proj_data)
+        v0s = self.initialize_initial_velocities()
         return {
             "alphas": [torch.tensor([12.5], dtype=torch.float64, device=self.device) for _ in range(self.N)],
             'omegas': [torch.zeros(size=(1,), dtype=torch.float64, device=self.device) for _ in range(self.N)],
@@ -328,47 +319,14 @@ class GMM_reco:
             'a0s': self.a0s,
         }
 
-    def initialize_initial_velocities(
-        self, 
-        t: torch.Tensor, 
-        proj_data: list[torch.Tensor],
-    ) -> list[torch.Tensor]:
-        """Detect projection peaks and create random v0 starting points."""
-        self.peak_data = PeakData(self.N, self.device)
-        proj_data_array = proj_data[0] if isinstance(proj_data, list) else proj_data
-        
-        if self.fitted_gaussian_peaks is None:
-            self._detect_all_peaks(proj_data_array, self.receivers[0], t)
-        else:
-            pdr = self.peak_detection_records.copy()
-            
-            for time_val, detected_heights in self.fitted_gaussian_peaks.items():
-                t_val_float = time_val.item() if isinstance(time_val, torch.Tensor) else float(time_val)
-                self.peak_data.add_time_detections(t_val_float, detected_heights)
-                
-                sub_df = pdr[
-                    torch.isclose(torch.tensor(pdr['time_val'].values, dtype=torch.float64), 
-                                  torch.tensor(t_val_float, dtype=torch.float64)
-                                  ).numpy()
-                    ].sort_values(by='gaussian_idx')                
-                for n_r, row in enumerate(sub_df.itertuples()):
-                    self.peak_data.add_peak_detection(
-                        time_idx=int(row.time_idx),
-                        time_val=row.time_val,
-                        receiver_idx=int(row.receiver_idx),
-                        receiver_pos=row.receiver_pos,  # Sub-pixel fitted mean (mu) or grid pos
-                        peak_val=row.peak_val,
-                        gaussian_idx=int(row.gaussian_idx),
-                    )
-                
-        self.peak_data.finalize_detections()
-        self._create_legacy_aliases()
-
-        # Sample v0 ~ N([1, 1], 1.5²·I) for each Gaussian
+    def initialize_initial_velocities(self) -> list[torch.Tensor]:
+        """Create random v0 starting points."""
+        # ---- Prior Sampling for each Gaussian --------
         v0s = []
         for _ in range(self.N):
             v0 = torch.tensor([1.0, 1.0], dtype=torch.float64, device=self.device)
-            v0 = v0 + 1.5 * torch.randn(2, dtype=torch.float64, device=self.device)
+            # v0 = v0 + 1.5 * torch.randn(2, dtype=torch.float64, device=self.device)
+            v0 = v0 + 3.5 * torch.randn(2, dtype=torch.float64, device=self.device)
             v0.requires_grad_(True)
             v0s.append(v0)
             
@@ -392,7 +350,30 @@ class GMM_reco:
             U_skews.append(U_k)
         return U_skews
     
-    def _detect_all_peaks(
+    # ==================================================================
+    # Trajectory Traversal & Hungarian Loss
+    # ==================================================================
+    
+    def peak_detection(
+        self,
+        t: torch.Tensor,
+        proj_data: list[torch.Tensor] | torch.Tensor,
+    ) -> None:
+        """Detect projection peaks and create random v0 starting points."""
+        self.peak_data = PeakData(self.N, self.device)
+        proj_data_array = proj_data[0] if isinstance(proj_data, list) else proj_data
+        
+        if getattr(self, "fitted_gaussian_params", None) is None:
+            logger.info(f"Detecting peaks using the sliding window approach...")
+            self._sliding_window_peak_detection(proj_data_array, self.receivers[0], t)
+        else:
+            logger.info(f"Detecting peaks using the Gaussian fit approach...")
+            self._gaussian_fit_peak_detection()
+                
+        self.peak_data.finalize_detections()
+        self._create_legacy_aliases()
+        
+    def _sliding_window_peak_detection(
         self, 
         proj_data: list[torch.Tensor], 
         receivers: list[list[torch.Tensor]], 
@@ -423,10 +404,29 @@ class GMM_reco:
                         break
                     
             self.peak_data.add_time_detections(time_val.item(), detected_heights)
-    
-    # ==================================================================
-    # Trajectory Traversal & Hungarian Loss
-    # ==================================================================
+            
+    def _gaussian_fit_peak_detection(self):
+        pdr = self.peak_detection_records.copy()
+        pdr_times = pdr['time_val'].to_numpy(dtype=np.float64)
+        
+        for time_val, detected_heights in self.fitted_gaussian_params.items():
+            t_val_float = time_val.item() if isinstance(time_val, torch.Tensor) else float(time_val)
+            self.peak_data.add_time_detections(t_val_float, detected_heights)
+            
+            sub_df = pdr[np.isclose(pdr_times, t_val_float, atol=1e-8)].sort_values(by='gaussian_idx')
+                    
+            for row in sub_df.itertuples():
+                rcv_idx = int(row.receiver_idx)
+                rcv_pos = self.receivers[0][rcv_idx]
+
+                self.peak_data.add_peak_detection(
+                    time_idx=int(row.time_idx),
+                    time_val=float(row.time_val),
+                    receiver_idx=rcv_idx,
+                    receiver_pos=rcv_pos,
+                    peak_val=float(row.peak_val),
+                    gaussian_idx=int(row.gaussian_idx),
+                )
     
     def _loss_trajectory(self, theta_tensor: torch.Tensor) -> torch.Tensor:
         """Stage 1 loss: L1 distance between predicted and observed peak heights.

@@ -14,11 +14,12 @@ from time import time as wall_clock
 import numpy as np
 import torch
 import pandas as pd
+# import torch.nn.functional as F
+import matplotlib.pyplot as plt
 
 from .config import ExperimentConfig
 from .model import GMM_reco
 from .utils import export_parameters, set_random_seeds
-from .visualization.simulate_viz import animate_simulation
 
 logger = logging.getLogger(__name__)
 
@@ -68,43 +69,46 @@ def _try_load_ground_truth(exp_dir: Path, device: torch.device) -> None:
 
 import torchmin
 
-def fit_gmm_1d_single_k(
+def fit_gmm_1d_fixed_N(
     proj_row: torch.Tensor, 
     receiver_coords: torch.Tensor, 
-    k: int,
+    N: int,
+    min_amplitude_threshold: float = 1e-4,
 ) -> tuple[torch.Tensor, float]:
-    """Fits k 1D Gaussians to a projection row and returns (peaks, loss_value)."""
+    """Fits fixed N 1D Gaussians allowing A -> 0 via softplus parameterization."""
     device = proj_row.device
     dtype = torch.float64
     proj_row = proj_row.to(dtype=dtype)
     receiver_coords = receiver_coords.to(device=device, dtype=dtype)
-
-    if k == 0:
+    
+    if N == 0:
         loss_val = torch.mean(proj_row ** 2).item()
         return torch.empty((0, 3), dtype=dtype, device=device), loss_val
 
-    # 1. Initialize mu across active detector span
     r_min, r_max = receiver_coords.min(), receiver_coords.max()
     span = r_max - r_min
-    mu_init = torch.linspace(r_min + 0.1 * span, r_max - 0.1 * span, k, device=device, dtype=dtype)
     
-    # 2. Log-parameterized initializations
-    target_A = (proj_row.max() / k).clamp(min=1e-3)
+    # 1. Initialize mu raw values near center via inverse sigmoid
+    mu_grid = torch.linspace(r_min + 0.1 * span, r_max - 0.1 * span, N, device=device, dtype=dtype)
+    # Inverse sigmoid: logit((mu - r_min) / span)
+    mu_raw_init = torch.logit((mu_grid - r_min) / span)
+
+    # 2. Initializations
+    target_A = (proj_row.max() / N).clamp(min=1e-3)
     target_sigma = torch.tensor(0.15, device=device, dtype=dtype)
     
-    log_A_init = torch.full((k,), torch.log(target_A).item(), device=device, dtype=dtype)
-    log_sigma_init = torch.full((k,), torch.log(target_sigma).item(), device=device, dtype=dtype)
+    log_A_init = torch.full((N,), torch.log(target_A).item(), device=device, dtype=dtype)
+    log_sigma_init = torch.full((N,), torch.log(target_sigma).item(), device=device, dtype=dtype)
 
-    # Parameters: [log_A (k), mu (k), log_sigma (k)]
-    params = torch.cat([log_A_init, mu_init, log_sigma_init]).requires_grad_(True)
+    params = torch.cat([log_A_init, mu_raw_init, log_sigma_init]).requires_grad_(True)
     r = receiver_coords.unsqueeze(1)  # [R, 1]
 
     def loss_fn(p):
-        A = torch.exp(p[:k])
-        mu = p[k:2*k]
-        sigma = torch.exp(p[2*k:]) + 1e-4
+        A = torch.exp(p[:N])
+        # Sigmoid parameterization guarantees mu in (r_min, r_max)
+        mu = r_min + span * torch.sigmoid(p[N:2*N])
+        sigma = torch.exp(p[2*N:]) + 1e-4
         
-        # [R, k]
         diff = (r - mu) / sigma
         pred = torch.sum(A * torch.exp(-0.5 * (diff ** 2)), dim=1)
         return torch.mean((pred - proj_row) ** 2)
@@ -113,21 +117,21 @@ def fit_gmm_1d_single_k(
         loss_fn, 
         params, 
         method='l-bfgs', 
-        options={'max_iter': 500, 'gtol': 1e-6, 'disp': False}
+        options={'max_iter': 5000, 'gtol': 1e-6, 'disp': False}
     )
     
     p_opt = res.x
-    A_opt = torch.exp(p_opt[:k])
-    mu_opt = p_opt[k:2*k]
-    sigma_opt = torch.exp(p_opt[2*k:]) + 1e-4
-    
-    peaks = torch.stack([mu_opt, A_opt, sigma_opt], dim=1)
-    loss_val = res.fun.item() if isinstance(res.fun, torch.Tensor) else float(res.fun)
-    
-    # Sort peaks spatially by mu (first column)
+    A_opt = torch.exp(p_opt[:N])
+    mu_opt = r_min + span * torch.sigmoid(p_opt[N:2*N])
+    sigma_opt = torch.exp(p_opt[2*N:]) + 1e-4
+
+    # Spatial sort
     sort_idx = torch.argsort(mu_opt)
     peaks = torch.stack([mu_opt[sort_idx], A_opt[sort_idx], sigma_opt[sort_idx]], dim=1)
+    loss_val = res.fun.item() if isinstance(res.fun, torch.Tensor) else float(res.fun)
+    
     return peaks, loss_val
+
 
 def fit_gmm_torchmin(
     proj_row: torch.Tensor, 
@@ -135,15 +139,8 @@ def fit_gmm_torchmin(
     N: int,
 ) -> torch.Tensor:
     """Fits 1D GMM evaluating all k in [0, 1, ..., N] and returns parameters with lowest MSE."""
-    best_loss = float('inf')
     best_peaks = torch.empty((0, 3), dtype=torch.float64, device=proj_row.device)
-
-    for k in range(N + 1):
-        peaks, loss_val = fit_gmm_1d_single_k(proj_row, receiver_coords, k)
-        if loss_val < best_loss:
-            best_loss = loss_val
-            best_peaks = peaks
-
+    best_peaks, _ = fit_gmm_1d_fixed_N(proj_row, receiver_coords, N)
     return best_peaks
 
 # ======================================================================
@@ -172,53 +169,163 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
     model = GMM_reco.from_config(cfg)
     if gt is not None and "theta_true" in gt:
         model.theta_true = gt["theta_true"]
-        
-    # --- Save projections ---
-    proj_tensor = model.process_projections(proj_data)
-    receiver_coords = torch.tensor([r[1] for r in model.receivers[0]])
-    # import matplotlib.pyplot as plt
-    fitted_gaussian_peaks = {}
-    records = []
-    
-    for n_p, proj_row in enumerate(proj_tensor):
-        peaks = fit_gmm_torchmin(
-            proj_row=proj_row,
-            receiver_coords=receiver_coords,
-            N = cfg.reco_n_gaussians,
-        )
-        if len(peaks) > 0:
-            # fig, axs = plt.subplots(ncols=1)
-            time_val = t[n_p]
-            detected_heights = []
-            
-            for n_d, data in enumerate(peaks):
-                mu, A, sigma = data
-                time_val_scalar = time_val.item() if isinstance(time_val, torch.Tensor) else float(time_val)
-                detected_heights.append(mu.item())
-                receiver_idx = torch.argmin(torch.abs(mu - receiver_coords)).item()
-                
-                records.append({
-                    'time_idx': int(n_p),
-                    'time_val': float(time_val_scalar),
-                    'receiver_idx': int(receiver_idx),
-                    'receiver_pos': float(receiver_coords[receiver_idx].item()),
-                    'peak_val': float(A.item()),
-                    'gaussian_idx': int(n_d),
-                })
-                
-            fitted_gaussian_peaks[time_val_scalar] = detected_heights.copy()
-                
-                # axs.plot(receiver_coords, proj_row, label='data')
-                # axs.vlines(mu, 0.0, A)
-            # out_dir = exp_dir / "fitted_plots"
-            # out_dir.mkdir(parents=True, exist_ok=True)        
-            # plt.savefig(out_dir / f"n_{n_p}.png", dpi=150, bbox_inches='tight')
-            # plt.close()
 
+    # --- 1. Peak Detection via Gaussian Fitting ---
+    proj_tensor = model.process_projections(proj_data)
+    device = proj_tensor.device
+
+    # Extract receiver 1D positions as a clean float64 tensor on the same device
+    rcv_coords = torch.tensor(
+        [r[1] for r in model.receivers[0]], dtype=torch.float64, device=device
+    )
+
+    fitted_gaussian_params = {}
+    records = []
+    data = []
+
+    for n_p, proj_row in enumerate(proj_tensor):
+        params = fit_gmm_torchmin(
+            proj_row=proj_row,
+            receiver_coords=rcv_coords,
+            N=cfg.reco_n_gaussians,
+        )
+
+        if len(params) > 0:
+            params = params[params[:, 1] > 0.075]
+            
+            time_val_scalar = (
+                t[n_p].item() if isinstance(t[n_p], torch.Tensor) else float(t[n_p])
+            )
+
+            mu = params[:, 0]
+            A = params[:, 1]
+            sigma = params[:, 2]
+
+            data.append(
+                {
+                    "time_idx": int(n_p),
+                    "time_val": time_val_scalar,
+                    "mu": mu.detach().cpu(),
+                    "A": A.detach().cpu(),
+                    "sigma": sigma.detach().cpu(),
+                }
+            )
+
+            detected_heights = []
+
+            # Unroll per-Gaussian components so peak records maintain 1-to-1 row structure
+            for n_d in range(len(params)):
+                mu_k = mu[n_d].item()
+                A_k = A[n_d].item()
+                sigma_k = sigma[n_d].item()
+
+                detected_heights.append(mu_k)
+
+                # Nearest receiver index on spatial grid
+                rcv_idx = torch.argmin(torch.abs(mu[n_d] - rcv_coords)).item()
+
+                records.append(
+                    {
+                        "time_idx": int(n_p),
+                        "time_val": time_val_scalar,
+                        "receiver_idx": int(rcv_idx),
+                        "receiver_pos": float(rcv_coords[rcv_idx].item()),
+                        "mu": float(mu_k),
+                        "peak_val": float(A_k),
+                        "sigma": float(sigma_k),
+                        "gaussian_idx": int(n_d),
+                    }
+                )
+
+            fitted_gaussian_params[time_val_scalar] = detected_heights
+
+    peak_detection_records = pd.DataFrame(records)
+    data_df = pd.DataFrame(data)
+
+    # --- 2. Diagnostic Spatial Profile Plots ---
+    out_dir = exp_dir / "fitted_plots"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    rcv_coords_np = rcv_coords.cpu().numpy()
+    time_vals_in_df = data_df["time_val"].to_numpy(dtype=np.float64)
+
+    for n_p, proj_row in enumerate(proj_tensor):
+        time_val_scalar = (
+            t[n_p].item() if isinstance(t[n_p], torch.Tensor) else float(t[n_p])
+        )
+
+        if np.any(np.isclose(time_vals_in_df, time_val_scalar, atol=1e-8)):
+            fig, ax = plt.subplots(figsize=(8, 4))
+
+            # True projection curve
+            ax.plot(
+                rcv_coords_np,
+                proj_row.cpu().numpy(),
+                label="True",
+                lw=3,
+                color="black",
+                alpha=0.3,
+            )
+
+            # Retrieve row matching frame time
+            sub_df = data_df[
+                np.isclose(time_vals_in_df, time_val_scalar, atol=1e-8)
+            ].iloc[0]
+
+            mu = sub_df["mu"].to(device=device)
+            A = sub_df["A"].to(device=device)
+            sigma = sub_df["sigma"].to(device=device)
+
+            # Vectorized 2D GMM evaluation: [R, 1] - [K] -> [R, K]
+            diff = rcv_coords.unsqueeze(1) - mu.unsqueeze(0)
+            y_fit = torch.sum(A * torch.exp(-0.5 * (diff / sigma) ** 2), dim=1)
+
+            ax.plot(
+                rcv_coords_np,
+                y_fit.cpu().numpy(),
+                label="GMM Fit",
+                color="crimson",
+                linestyle="--",
+                lw=1.8,
+            )
+
+            ax.set_title(f"Time: {time_val_scalar:.3f} s (Frame {n_p})")
+            ax.set_xlabel("Receiver Position")
+            ax.set_ylabel("Amplitude")
+            ax.legend(loc="upper right")
+
+            plt.savefig(out_dir / f"obs_{n_p:03d}.png", dpi=150, bbox_inches="tight")
+            plt.close(fig)
+
+    # --- 3. Trajectory Time-Series Plot ---
+    if not peak_detection_records.empty:
+        fig, ax = plt.subplots(figsize=(8, 5))
+
+        # Filter out negligible amplitude noise components
+        valid_peaks = peak_detection_records[peak_detection_records["peak_val"] > 1e-4]
+
+        ax.scatter(
+            valid_peaks["time_val"],
+            valid_peaks["mu"],
+            c=valid_peaks["peak_val"],
+            cmap="viridis",
+            s=15,
+            alpha=0.8,
+            edgecolors="none",
+        )
+
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Fitted Mean Position (μ)")
+        ax.set_title("Peak Trajectories Over Time")
+        ax.grid(True, linestyle=":", alpha=0.6)
+
+        plt.savefig(exp_dir / "time_series.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    
     # --- Run reconstruction ---
     logger.info("Starting GMM reconstruction optimization...")
-    # model.peak_detection_records = pd.DataFrame(records)
-    # model.fitted_gaussian_peaks = fitted_gaussian_peaks.copy()
+    model.peak_detection_records = pd.DataFrame(records)
+    model.fitted_gaussian_params = fitted_gaussian_params.copy()
     soln_dict = model.fit(proj_data, t)
 
     # --- Export Human-Readable Parameter Estimates ---

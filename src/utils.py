@@ -66,7 +66,7 @@ def generate_bounded_velocity_ensemble(
     N: int,
     v_min: tuple[float, float] = (0.1, -0.5),
     v_max: tuple[float, float] = (2.0, 5.0),
-    alpha: float = 0.4,         # Memory factor (0 = independent, 1 = constant)
+    alpha: float = 0.1,         # Memory factor (0 = independent, 1 = constant)
     device: torch.device = torch.device('cpu')
 ) -> list[torch.Tensor]:
     """
@@ -77,8 +77,8 @@ def generate_bounded_velocity_ensemble(
     v_max_t = torch.tensor(v_max, dtype=torch.float64, device=device)
     
     # Latent state initialized at center (0.0 maps to midpoint in sigmoid space)
-    z = torch.zeros(2, dtype=torch.float64, device=device)
-    step_std_vec = torch.tensor([0.25, 1.25], dtype=torch.float64, device=device)
+    z = torch.zeros(len(v_min_t), dtype=torch.float64, device=device)
+    step_std_vec = torch.tensor([0.5, 1.5], dtype=torch.float64, device=device)
     
     v0s = []
     for _ in range(N):
@@ -87,7 +87,8 @@ def generate_bounded_velocity_ensemble(
         z = alpha * z + noise
         
         # Sigmoidal mapping to physical velocity bounds [v_min, v_max]
-        v_k = v_min_t + (v_max_t - v_min_t) * torch.sigmoid(z)
+        shape = (1,)
+        v_k = v_min_t + (v_max_t - v_min_t) * torch.sigmoid(z) + torch.tensor([.1, .1], dtype=torch.float64, device=device) * (torch.randint(0, 2, shape) * 2 - 1)
         v0s.append(v_k)
         
     return v0s
@@ -189,20 +190,10 @@ def generate_true_param(
 # ==========================================================================
 
 def set_random_seeds(seed=42):
-    """Set random seeds for PyTorch and NumPy for reproducibility.
-
-    Parameters
-    ----------
-    seed : int
-
-    Returns
-    -------
-    numpy.random.Generator
-    """
+    """Set random seeds for PyTorch and NumPy for reproducibility."""
     torch.manual_seed(seed)
     np.random.seed(seed)
     return np.random.default_rng(seed)
-
 
 def export_parameters(
     theta_dict: dict[str, list[torch.Tensor]], 

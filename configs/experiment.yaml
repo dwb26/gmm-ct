@@ -1,12 +1,12 @@
 device: null
-seed: 12
+seed: 17
 add_sino_noise: true
 # snr_db: 20
 snr_db: 10000
 
 model: 
-  sim_n_gaussians: 8
-  reco_n_gaussians: 8
+  sim_n_gaussians: 4
+  reco_n_gaussians: 4
 
 geometry:
   sources:
@@ -29,9 +29,7 @@ physics:
   initial_velocities: [0.1, 0.25]
 
 reconstruction:
-  n_trajectory_trials: 20
-  n_omega_inits: 5
-  max_iterations: 500
+  max_iterations: 5000
   tolerance: 1e-5
 
 output:

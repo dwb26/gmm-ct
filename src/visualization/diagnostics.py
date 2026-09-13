@@ -1,13 +1,9 @@
 """Diagnostic plotting functions for GMM-CT reconstruction."""
 
-import logging
-
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-
-logger = logging.getLogger(__name__)
 
 # Default font sizes for diagnostic plots — kept in sync with publication._FS_*
 _LABEL_FONTSIZE = 24
@@ -112,33 +108,6 @@ def plot_heights_by_assignment(model, true_data=False):
     )
     plt.savefig(filename, dpi=150, bbox_inches='tight')
     plt.close()
-
-
-# def plot_raw_receiver_heights(model):
-#     """
-#     Plot raw, unassigned receiver heights where peaks were detected.
-
-#     Parameters
-#     ----------
-#     model : GMM_reco
-#         The reconstruction model instance.
-#     """
-#     fig, ax = plt.subplots(figsize=(10, 6))
-
-#     for time_val, heights in model.time_rcvr_heights_dict_non_empty.items():
-#         if heights:
-#             times = [time_val] * len(heights)
-#             height_vals = [h.item() for h in heights]
-#             ax.scatter(times, height_vals, s=10, color='black')
-
-#     ax.set_xlabel('Time', fontsize=_LABEL_FONTSIZE)
-#     ax.set_ylabel('Height', fontsize=_LABEL_FONTSIZE)
-#     ax.tick_params(axis='both', which='major', labelsize=_TICK_FONTSIZE)
-#     ax.grid(True, alpha=0.3, linestyle='--')
-
-#     filename = model.output_dir / f'raw_receiver_heights_K{model.N}.png'
-#     plt.savefig(filename, dpi=150, bbox_inches='tight')
-#     plt.close()
 
 
 # ======================================================================
@@ -279,7 +248,6 @@ def plot_gmm_and_projections(model, res, n_gmm_times=8, theta_true=None):
         is used to draw the true GMM; otherwise centroid markers are used.
     """
     if model.d != 2:
-        logger.debug("plot_gmm_and_projections currently supports 2-D only — skipping.")
         return
 
     from ..visualization.publication import (
@@ -370,8 +338,7 @@ def plot_gmm_and_projections(model, res, n_gmm_times=8, theta_true=None):
         if not data_k:
             continue
         inds = [item[0] for item in data_k]
-        # heights = [item[1].item() if isinstance(item[1], torch.Tensor) else float(item[1]) for item in data_k]
-        heights = [item[1] if isinstance(item[1], torch.Tensor) else float(item[1]) for item in data_k]
+        heights = [item[1].item() if isinstance(item[1], torch.Tensor) else float(item[1]) for item in data_k]
         t_pts = model.t_observable[inds].cpu().numpy()
         ax.scatter(t_pts, heights, s=14, color=gauss_colors[k],
                    alpha=0.85, zorder=5, label=f'$\\rho_{{{k+1}}}$')
@@ -416,8 +383,6 @@ def plot_trajectory_fitting(model, res):
     res : OptimizeResult
         Best trajectory optimisation result.
     """
-    import torch
-
     # ── Reconstruct theta ────────────────────────────────────────────────
     theta_dict = model.map_from_tensor_to_dict(res.x)
     full_theta = {'v0s': theta_dict['v0s']}
@@ -464,7 +429,7 @@ def plot_trajectory_fitting(model, res):
         mask = (init_pred_h >= min_rcvr_h) & (init_pred_h <= max_rcvr_h)
         ax.plot(t_all[mask], init_pred_h[mask],
                 color=gauss_colors[k], lw=1,
-                label=f'$\widehat{{\\mathbf{{r}}}}[\\mathbf{{\\eta}}_{{{k+1}}}](t)$', zorder=3)
+                label=rf'$\widehat{{\mathbf{{r}}}}[\mathbf{{\eta}}_{{{k+1}}}](t)$', zorder=3)
 
     # ax.set_title('Detected modes + trajectories', fontsize=_TITLE_FONTSIZE, fontweight='bold')
     ax.set_title('Mode data + initialization', fontsize=_TITLE_FONTSIZE, fontweight='bold')
@@ -485,7 +450,7 @@ def plot_trajectory_fitting(model, res):
         mask = (pred_h >= min_rcvr_h) & (pred_h <= max_rcvr_h)
         ax.plot(t_all[mask], pred_h[mask],
                 color=gauss_colors[k], lw=1,
-                label=f'$\widehat{{\\mathbf{{r}}}}[\\mathbf{{\\eta}}_{{{k+1}}}^*](t)$', zorder=3)
+                label=rf'$\widehat{{\mathbf{{r}}}}[\mathbf{{\eta}}_{{{k+1}}}^*](t)$', zorder=3)
 
         # Black scatter: maximising receivers heights vs observed times
         rcvrs_k = model.maximising_rcvrs[k]

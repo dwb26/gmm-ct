@@ -16,7 +16,6 @@ plot_true_trajectories
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Optional
 
@@ -39,6 +38,7 @@ plt.rcParams["grid.linestyle"] = "--"
 plt.rcParams["grid.alpha"] = 0.7
 
 
+from matplotlib.animation import FuncAnimation
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Patch
 from .publication import (
@@ -46,8 +46,6 @@ from .publication import (
     plot_gmm_snapshot_animated,
     plot_trajectories_single,
 )
-
-logger = logging.getLogger(__name__)
 
 _LABEL_FONTSIZE = 16
 _TITLE_FONTSIZE = 18
@@ -122,8 +120,6 @@ def plot_simulation_summary(
         _summary_2d(projs, t, theta_true, receivers, N, output_dir)
     elif d == 3:
         _summary_3d(projs, t, theta_true, receivers, N, output_dir)
-    else:
-        logger.warning("plot_simulation_summary: unsupported d=%d", d)
 
 
 # ─── 2-D summary ─────────────────────────────────────────────────────────────
@@ -191,7 +187,6 @@ def _summary_2d(
     outpath = output_dir / 'simulation_summary_2d.png'
     plt.savefig(outpath, dpi=150, bbox_inches='tight')
     plt.close()
-    logger.info("Saved 2D simulation summary to %s", outpath)
 
 
 # ─── 3-D summary ─────────────────────────────────────────────────────────────
@@ -236,7 +231,6 @@ def _summary_3d(
     out1 = output_dir / 'simulation_detector_frames_3d.png'
     plt.savefig(out1, dpi=150, bbox_inches='tight')
     plt.close()
-    logger.info("Saved detector frames to %s", out1)
 
     # ── Figure 2: trajectory projections + signal statistics ─────────────
     fig, axes = plt.subplots(1, 3, figsize=(21, 6),
@@ -289,7 +283,6 @@ def _summary_3d(
     out2 = output_dir / 'simulation_summary_3d.png'
     plt.savefig(out2, dpi=150, bbox_inches='tight')
     plt.close()
-    logger.info("Saved 3D simulation summary to %s", out2)
 
 
 # ─── standalone public helpers ────────────────────────────────────────────────
@@ -547,10 +540,6 @@ def animate_simulation(
     -------
     anim : matplotlib.animation.FuncAnimation
     """
-    from matplotlib.animation import FuncAnimation
-    from matplotlib.gridspec import GridSpec
-    from matplotlib.patches import Patch
-
     from .publication import (
         plot_acquisition_geometry,
         plot_gmm_snapshot_animated,
@@ -575,10 +564,6 @@ def animate_simulation(
 
     if d == 3:
         # ── 3D animation: x–y panel | x–z panel | detector heatmap ──────
-        from matplotlib.animation import FuncAnimation
-        from matplotlib.gridspec import GridSpec
-        from matplotlib.patches import Patch
-
         projs_np = projs.cpu().numpy()      # (T, n_y * n_z)
         t_np = t.cpu().numpy()
         T = len(t_np)
@@ -715,9 +700,7 @@ def animate_simulation(
         if output_path:
             output_path = Path(output_path)
             fps_save = n_frames / (t_end - t_start)
-            logger.info("Saving 3D simulation animation to %s ...", output_path)
             anim_3d.save(str(output_path), writer='ffmpeg', fps=fps_save)
-            logger.info("Saved: %s", output_path)
 
         return anim_3d
 
@@ -1204,7 +1187,6 @@ def animate_simulation_interactive(
 
     if output_path:
         fig.write_html(str(output_path), include_plotlyjs='cdn')
-        logger.info("Saved interactive animation to %s", output_path)
     else:
         fig.show()
 

@@ -41,7 +41,7 @@ class PeakData:
         time_idx: int,
         time_val: float,
         receiver_idx: int,
-        receiver_pos: float,
+        receiver_pos: float | torch.Tensor,
         peak_val: float,
         gaussian_idx: int,
     ) -> None:
@@ -50,7 +50,7 @@ class PeakData:
         self.receiver_indices[gaussian_idx].append(receiver_idx)
         self.peak_values[gaussian_idx].append(peak_val)
         
-        if gaussian_idx == 0 and time_idx not in self.observable_indices:
+        if time_idx not in self.observable_indices:
             self.observable_indices.append(time_idx)
             
     def add_time_detections(
@@ -63,6 +63,7 @@ class PeakData:
     
     def finalize_detections(self) -> None:
         """Convert accumulated per-Gaussian lists to PyTorch tensors."""
+        self.observable_indices = sorted(list(set(self.observable_indices)))
         for k in range(self.N):
             vals = self.times[k]
             self.times[k] = (
