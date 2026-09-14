@@ -1,8 +1,10 @@
 device: null
-seed: 17
+seed: 1
 add_sino_noise: true
-# snr_db: 30
-snr_db: 20
+# snr_db: 20000
+snr_db: 30
+# snr_db: 20
+# snr_db: 10
 
 model: 
   sim_n_gaussians: 4
@@ -22,11 +24,9 @@ physics:
     - [1.0, 1.0]
   initial_accelerations:
     - [0.0, -9.81]
-
   omega_range: [1.0, 3.0]
   n_projections: 150
   duration: 2.0
-  initial_velocities: [0.1, 0.25]
 
 reconstruction:
   max_iterations: 5000

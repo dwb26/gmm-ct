@@ -67,42 +67,86 @@ def generate_bounded_velocity_ensemble(
     v_min: tuple[float, float] = (0.1, -0.5),
     v_max: tuple[float, float] = (2.0, 5.0),
     alpha: float = 0.1,         # Memory factor (0 = independent, 1 = constant)
-    device: torch.device = torch.device('cpu')
+    device: torch.device = torch.device('cpu'),
+    sample_choice: int = 100,
 ) -> list[torch.Tensor]:
     """
     Generates N velocity vectors using a bounded mean-reverting process
     to maintain organic variability while mitigating particle trajectory overlap.
     """
-    v_min_t = torch.tensor(v_min, dtype=torch.float64, device=device)
-    v_max_t = torch.tensor(v_max, dtype=torch.float64, device=device)
+    dtype = torch.float64
+    v_min_t = torch.tensor(v_min, dtype=dtype, device=device)
+    v_max_t = torch.tensor(v_max, dtype=dtype, device=device)
     
     # Latent state initialized at center (0.0 maps to midpoint in sigmoid space)
-    z = torch.zeros(len(v_min_t), dtype=torch.float64, device=device)
-    step_std_vec = torch.tensor([0.5, 1.5], dtype=torch.float64, device=device)
+    z = torch.zeros(len(v_min_t), dtype=dtype, device=device)
+    step_std_vec = torch.tensor([0.5, 1.5], dtype=dtype, device=device)
     
     v0s = []
-    for _ in range(N):
+    for n in range(1, sample_choice * (N + 1)):
         # Mean-reverting random walk step in latent space
-        noise = torch.randn(2, dtype=torch.float64, device=device) * step_std_vec
+        noise = torch.randn(2, dtype=dtype, device=device) * step_std_vec
         z = alpha * z + noise
         
         # Sigmoidal mapping to physical velocity bounds [v_min, v_max]
         shape = (1,)
-        v_k = v_min_t + (v_max_t - v_min_t) * torch.sigmoid(z) + torch.tensor([.1, .1], dtype=torch.float64, device=device) * (torch.randint(0, 2, shape) * 2 - 1)
-        v0s.append(v_k)
+        v_k = v_min_t + (v_max_t - v_min_t) * torch.sigmoid(z) 
+        + torch.tensor([.1, .1], dtype=dtype, device=device) * (torch.randint(0, 2, shape) * 2 - 1)
+        if n % sample_choice == 0:
+            v0s.append(v_k)
         
     return v0s
+
+def generate_particle_morphology(
+    N: int,
+    d: int = 2,
+    min_diag_ratio: float = 1.5,
+    device: torch.device = torch.device('cpu'),
+) -> list[torch.Tensor]:
+    """Generates upper-triangular precision factor matrices U."""
+    dtype = torch.float64
+    U_ns = []
+    
+    for _ in range(N):
+        for _ in range(500):
+            # Sample diagonal in range [10.0, 40.0]
+            U_n_diag = torch.rand(size=(d,), dtype=dtype, device=device) * 30.0 + 10.0
+
+            # Reject isotropic or near-spherical Gaussians
+            if (U_n_diag.max() / U_n_diag.min()).item() < min_diag_ratio:
+                continue
+
+            # Zero-centered off-diagonals to avoid systematic shear bias
+            num_off_diag = (d - 1) * d // 2
+            U_n_upper = torch.randn(size=(num_off_diag,), dtype=dtype, device=device) * 3.0
+
+            # Construct upper triangular matrix U
+            U_n = torch.zeros((d, d), dtype=dtype, device=device)
+            triu_indices = torch.triu_indices(d, d, offset=0, device=device)
+            
+            diag_mask = (triu_indices[0] == triu_indices[1])
+            off_diag_mask = ~diag_mask
+
+            U_n[triu_indices[0][diag_mask], triu_indices[1][diag_mask]] = U_n_diag
+            U_n[triu_indices[0][off_diag_mask], triu_indices[1][off_diag_mask]] = U_n_upper
+            break
+        else:
+            warnings.warn(
+                f"Could not satisfy min_diag_ratio >= {min_diag_ratio}; accepting last sample.",
+                RuntimeWarning, stacklevel=2
+            )
+        U_ns.append(U_n)
+        
+    return U_ns
 
 def generate_true_param(
     d: int, 
     N: int, 
     initial_location: torch.Tensor, 
-    initial_velocity: torch.Tensor,
     initial_acceleration: torch.Tensor, 
     min_rot: float, 
     max_rot: float,
     device: torch.device | None = None, 
-    min_diag_ratio: float = 1.5
 ) -> dict[str, list[torch.tensor]]:
     """Generate a complete set of synthetic GMM parameters for testing.
 
@@ -121,8 +165,6 @@ def generate_true_param(
 
     if len(initial_location) != d:
         raise ValueError("initial_location must have length d.")
-    if len(initial_velocity) != d:
-        raise ValueError("initial_velocity must have length d.")
     if len(initial_acceleration) != d:
         raise ValueError("initial_acceleration must have length d.")
 
@@ -134,45 +176,12 @@ def generate_true_param(
     ]
 
     # ---- Generate morphology precision matrices – rejection-sample to enforce minimum anisotropy
-    U_ns = []
-    for _ in range(N):
-        for _ in range(500):
-            mean_diag_val = 15.5
-            U_n_diag = torch.rand(size=(d,), dtype=torch.float64, device=device) * 30.0 + mean_diag_val
-
-            # Test for the anisotropy condition before constructing the full matrix. If fails, restart
-            if (U_n_diag.max() / U_n_diag.min()).item() < min_diag_ratio:
-                continue
-
-            # Construct the full upper-triangular matrix with the sampled diagonal and random upper entries
-            U_n_upper = 10 + torch.randn(
-                size=((d - 1) * d // 2,), dtype=torch.float64, device=device
-            )
-            U_n = torch.zeros(d, d, dtype=torch.float64, device=device)
-            triu_indices = torch.triu_indices(d, d, device=device)
-            diag_idx = 0
-            upper_idx = 0
-            for idx in range(len(triu_indices[0])):
-                i, j = triu_indices[0][idx], triu_indices[1][idx]
-                if i == j:
-                    U_n[i, j] = U_n_diag[diag_idx]
-                    diag_idx += 1
-                else:
-                    U_n[i, j] = U_n_upper[upper_idx]
-                    upper_idx += 1
-            break
-        else:
-            warnings.warn(
-                f"Could not generate U_skew with diagonal ratio >= {min_diag_ratio} "
-                "after 500 attempts; accepting last sample.",
-                RuntimeWarning, stacklevel=2,
-            )
-        U_ns.append(U_n)
+    U_ns = generate_particle_morphology(N)
 
     # ---- Generate angular velocities
+    num_rot_params = math.comb(d, 2)
     omegas = [
-        max_rot - torch.rand(size=(math.comb(d, 2),), dtype=torch.float64, device=device)
-        * (max_rot - min_rot)
+        max_rot - torch.rand(size=(num_rot_params,), dtype=torch.float64, device=device) * (max_rot - min_rot)
         for _ in range(N)
     ]
 
@@ -377,21 +386,3 @@ def NewtonRaphsonLBFGS(
             logger.warning("L-BFGS root-finding failed: %s", e)
 
     return x0
-
-
-    # hardcoded = False
-    # if hardcoded and N == 5 and d == 2:
-    #     v0s = [
-    #         torch.tensor([1.0, 3.0], dtype=torch.float64, device=device),
-    #         torch.tensor([1.5, 1.8], dtype=torch.float64, device=device),
-    #         torch.tensor([0.8, 2.5], dtype=torch.float64, device=device),
-    #         torch.tensor([0.75, 1.2], dtype=torch.float64, device=device),
-    #         torch.tensor([2., 3.], dtype=torch.float64, device=device),
-    #     ]
-    # else:
-    # v0s = [
-        # initial_velocity.to(torch.float64) + torch.abs(
-            # torch.randn(d, dtype=torch.float64, device=device)
-        # ) * torch.tensor([1.75, 2.5])
-        # for _ in range(N)
-    # ]

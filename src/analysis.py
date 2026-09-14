@@ -30,13 +30,11 @@ def run_analysis(
     est_data = torch.load(exp_dir / "reconstruction.pt" , map_location="cpu", weights_only=False)
     proj_data = torch.load(exp_dir / "projections.pt" , map_location="cpu", weights_only=False)
     
-    geometry_cfg = cfg.geometry
-    physics_cfg = cfg.physics
-    omega_min, omega_max = physics_cfg.omega_range
+    omega_min, omega_max = cfg.physics.omega_range
     device = torch.device(
         cfg.device if cfg.device else ("cuda" if torch.cuda.is_available() else "cpu")
     )
-    sources, receivers = geometry_cfg.to_tensors(device=device)
+    sources, receivers = cfg.geometry.to_tensors(device=device)
     
     analyze_results(
         theta_true=gt_data["theta_true"],
@@ -47,7 +45,7 @@ def run_analysis(
         t=proj_data["times"],
         sources=sources,
         receivers=receivers,
-        d=geometry_cfg.dimensionality,
+        d=cfg.geometry.dimensionality,
         N=cfg.reco_n_gaussians,
         omega_min=omega_min,
         omega_max=omega_max,

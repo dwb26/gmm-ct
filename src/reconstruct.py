@@ -2,9 +2,7 @@
 Reconstruction and analysis runner for GMM-CT.
 
 Loads observed projection data from disk, instantiates ``GMM_reco`` from a
-YAML config, runs the 4-stage reconstruction pipeline, saves the results,
-and — when ground-truth data is available — automatically runs error
-analysis and generates publication-quality plots.
+YAML config, runs the 4-stage reconstruction pipeline and saves the results.
 """
 
 import logging
@@ -13,8 +11,11 @@ from time import time as wall_clock
 
 import numpy as np
 import torch
+import torch.nn.functional as F
+import torchmin
 import pandas as pd
 import matplotlib.pyplot as plt
+import scipy.signal
 
 from .config import ExperimentConfig
 from .model import GMM_reco
@@ -66,51 +67,67 @@ def _try_load_ground_truth(exp_dir: Path, device: torch.device) -> None:
             logger.warning("Failed to load ground_truth.pt despite file existing %s", e)
     return None
 
-import torchmin
-
 def fit_gmm_1d_fixed_N(
     proj_row: torch.Tensor, 
     receiver_coords: torch.Tensor, 
     N: int,
     min_amplitude_threshold: float = 1e-4,
-) -> tuple[torch.Tensor, float]:
-    """Fits fixed N 1D Gaussians allowing A -> 0 via softplus parameterization."""
+    l1_reg: float = 1e-5,   # Drives unused Gaussians strictly to A = 0
+) -> torch.Tensor:
+    """Fits fixed N 1D Gaussians to a single timeframe sinogram.
+    Attenuates non-present modeled Gaussians by setting A = 0.
+    """
     device = proj_row.device
     dtype = torch.float64
     proj_row = proj_row.to(dtype=dtype)
     receiver_coords = receiver_coords.to(device=device, dtype=dtype)
-    
-    if N == 0:
-        loss_val = torch.mean(proj_row ** 2).item()
-        return torch.empty((0, 3), dtype=dtype, device=device), loss_val
 
     r_min, r_max = receiver_coords.min(), receiver_coords.max()
-    span = r_max - r_min
+    r_span = r_max - r_min
     
-    # 1. Initialize mu raw values near center via inverse sigmoid
-    mu_grid = torch.linspace(r_min + 0.1 * span, r_max - 0.1 * span, N, device=device, dtype=dtype)
-    # Inverse sigmoid: logit((mu - r_min) / span)
-    mu_raw_init = torch.logit((mu_grid - r_min) / span)
-
-    # 2. Initializations
-    target_A = (proj_row.max() / N).clamp(min=1e-3)
-    target_sigma = torch.tensor(0.15, device=device, dtype=dtype)
+    # 1. Initialize mu raw values via inverse sigmoid
+    proj_np = proj_row.detach().cpu().numpy()
+    # Filter out low background noise spikes
+    min_height = 0.1 * proj_np.max()
+    peaks_idx, _ = scipy.signal.find_peaks(proj_np, height=min_height)
+    if len(peaks_idx) > 0:
+        mu_found = receiver_coords[peaks_idx]
+        # Fill remaining allocation slots up to N uniformly if len(mu_found) < N
+        if len(mu_found) < N:
+            pad = torch.linspace(r_min + 0.1 * r_span, r_max - 0.1 * r_span, N - len(mu_found), device=device, dtype=dtype)
+            mu_init = torch.cat([mu_found, pad])
+        else:
+            mu_init = mu_found[:N]
+    else:
+        mu_init = torch.linspace(r_min + 0.1 * r_span, r_max - 0.1 * r_span, N, device=device, dtype=dtype)
     
-    log_A_init = torch.full((N,), torch.log(target_A).item(), device=device, dtype=dtype)
-    log_sigma_init = torch.full((N,), torch.log(target_sigma).item(), device=device, dtype=dtype)
+    mu_raw_init = torch.logit(((mu_init - r_min) / r_span).clamp(1e-4, 1 - 1e-4))
 
-    params = torch.cat([log_A_init, mu_raw_init, log_sigma_init]).requires_grad_(True)
+    # 2. Initialization for other parameters (A and sigma)
+    target_A = max((0.5 * (proj_row.min() + proj_row.max()) / N).item(), 1e-3)
+    # Since A = relu(p_A)^2, p_A_init = sqrt(target_A)
+    A_raw_init = torch.full((N,), torch.sqrt(torch.tensor(target_A, dtype=dtype, device=device)))
+    
+    sigma = torch.tensor(0.15, device=device, dtype=dtype)
+    log_sigma_init = torch.full((N,), torch.log(sigma).item(), device=device, dtype=dtype)
+
+    params = torch.cat([A_raw_init, mu_raw_init, log_sigma_init]).requires_grad_(True)
     r = receiver_coords.unsqueeze(1)  # [R, 1]
 
     def loss_fn(p):
-        A = torch.exp(p[:N])
+        A = F.relu(p[:N]) ** 2
+        
         # Sigmoid parameterization guarantees mu in (r_min, r_max)
-        mu = r_min + span * torch.sigmoid(p[N:2*N])
+        mu = r_min + r_span * torch.sigmoid(p[N:2*N])
         sigma = torch.exp(p[2*N:]) + 1e-4
         
         diff = (r - mu) / sigma
         pred = torch.sum(A * torch.exp(-0.5 * (diff ** 2)), dim=1)
-        return torch.mean((pred - proj_row) ** 2)
+        
+        # MSE loss + L1 penalty on amplitudes to force unused components to zero
+        mse = torch.mean((pred - proj_row) ** 2)
+        penalty = l1_reg * torch.sum(A)        
+        return mse + penalty
 
     res = torchmin.minimize(
         loss_fn, 
@@ -120,27 +137,20 @@ def fit_gmm_1d_fixed_N(
     )
     
     p_opt = res.x
-    A_opt = torch.exp(p_opt[:N])
-    mu_opt = r_min + span * torch.sigmoid(p_opt[N:2*N])
+    
+    # Extract optimized parameters
+    A_opt = F.relu(p_opt[:N]) ** 2
+    mu_opt = r_min + r_span * torch.sigmoid(p_opt[N:2*N])
     sigma_opt = torch.exp(p_opt[2*N:]) + 1e-4
+    
+    # Hard-zero out any numerical sub-threshold noise residual
+    A_opt = torch.where(A_opt < min_amplitude_threshold, torch.zeros_like(A_opt), A_opt)
 
     # Spatial sort
     sort_idx = torch.argsort(mu_opt)
-    peaks = torch.stack([mu_opt[sort_idx], A_opt[sort_idx], sigma_opt[sort_idx]], dim=1)
-    loss_val = res.fun.item() if isinstance(res.fun, torch.Tensor) else float(res.fun)
+    params = torch.stack([mu_opt[sort_idx], A_opt[sort_idx], sigma_opt[sort_idx]], dim=1)
     
-    return peaks, loss_val
-
-
-def fit_gmm_torchmin(
-    proj_row: torch.Tensor, 
-    receiver_coords: torch.Tensor, 
-    N: int,
-) -> torch.Tensor:
-    """Fits 1D GMM evaluating all k in [0, 1, ..., N] and returns parameters with lowest MSE."""
-    best_peaks = torch.empty((0, 3), dtype=torch.float64, device=proj_row.device)
-    best_peaks, _ = fit_gmm_1d_fixed_N(proj_row, receiver_coords, N)
-    return best_peaks
+    return params
 
 # ======================================================================
 # Orchestration Engine
@@ -152,7 +162,7 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
     start = wall_clock()
 
     # --- Reproducibility & Device ---
-    set_random_seeds(cfg.seed)
+    set_random_seeds(cfg.seed + 10000)
     device = torch.device(
         cfg.device if cfg.device else ("cuda" if torch.cuda.is_available() else "cpu")
     )
@@ -183,15 +193,14 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
     data = []
 
     for n_p, proj_row in enumerate(proj_tensor):
-        params = fit_gmm_torchmin(
+        params = fit_gmm_1d_fixed_N(
             proj_row=proj_row,
             receiver_coords=rcv_coords,
             N=cfg.reco_n_gaussians,
         )
 
         if len(params) > 0:
-            # params = params[params[:, 1] > 0.075]
-            params = params[params[:, 1] > 0.1]
+            params = params[params[:, 1] > 0.075]
             
             time_val_scalar = (
                 t[n_p].item() if isinstance(t[n_p], torch.Tensor) else float(t[n_p])
@@ -240,9 +249,9 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
             fitted_gaussian_params[time_val_scalar] = detected_heights
 
     peak_detection_records = pd.DataFrame(records)
-    data_df = pd.DataFrame(data)
 
     # --- 2. Diagnostic Spatial Profile Plots ---
+    data_df = pd.DataFrame(data)
     out_dir = exp_dir / "fitted_plots"
     out_dir.mkdir(parents=True, exist_ok=True)
 

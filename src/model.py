@@ -15,10 +15,9 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from scipy.optimize import linear_sum_assignment
 from torchmin import minimize
 
-from .utils import NewtonRaphsonLBFGS
+from .utils import generate_bounded_velocity_ensemble, NewtonRaphsonLBFGS
 from .structures import PeakData
 
 logger = logging.getLogger(__name__)
@@ -59,8 +58,9 @@ class GMM_reco:
         self.device = (
             torch.device(device) if device is not None
             else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        )
+        )        
 
+        # Experiment directory
         self.exp_dir = Path(exp_dir) if exp_dir else Path('data/results')
         if self.save_diagnostics:
             self.exp_dir.mkdir(parents=True, exist_ok=True)
@@ -259,20 +259,19 @@ class GMM_reco:
         'x0s': [x0.clone().detach() for x0 in self.x0s],
         'a0s': [a0.clone().detach() for a0 in self.a0s],
         }
-
-        n_traj_trials = self.n_traj_trials or max(20, 2 * self.N)
-        logger.info("Running %d trajectory multi-start trials", n_traj_trials)
+        logger.info("Running %d trajectory multi-start trials", self.n_traj_trials)
 
         errors, results = [], []
         self.peak_detection(t, proj_data)
-        for _ in range(n_traj_trials):
+        for _ in range(self.n_traj_trials):
             self.theta_dict_init = self.initialize_parameters()
+            
             for v0_n in self.theta_dict_init["v0s"]:
                 v0_n.requires_grad_(True)
 
             theta_tensor_init = self.map_from_dict_to_tensor(self.theta_dict_init, mode='trajectory')
             res_trial = minimize(
-                self._loss_trajectory, 
+                self._loss_trajectory,
                 x0=theta_tensor_init, 
                 method='l-bfgs',
                 tol=1e-8, 
@@ -291,15 +290,11 @@ class GMM_reco:
             )
 
         soln_dict["v0s"] = [v0_n.clone().detach() for v0_n in soln_dict["v0s"]]
-        
-        if self.save_diagnostics:
-            self._plot_stage1_diagnostics(best_res)
-
         soln_dict = self.refine_initial_velocities_via_newton_raphson(soln_dict, best_res)
 
         soln_dict["omegas"] = [omega.clone().detach() for omega in self.theta_dict_init["omegas"]]
         soln_dict["alphas"] = [alpha.clone().detach() for alpha in self.theta_dict_init["alphas"]]
-        soln_dict["U_skews"] = self.initialize_anisotropic_U_skews(soln_dict["v0s"])
+        soln_dict["U_skews"] = self.initialize_anisotropic_U_skews()
 
         return soln_dict        
     
@@ -311,28 +306,39 @@ class GMM_reco:
         """Initialize all GMM parameters before Stage 1 optimization."""
         v0s = self.initialize_initial_velocities()
         return {
-            "alphas": [torch.tensor([12.5], dtype=torch.float64, device=self.device) for _ in range(self.N)],
+            # "alphas": [torch.tensor([12.5], dtype=torch.float64, device=self.device) for _ in range(self.N)],
+            "alphas": [torch.tensor([10.], dtype=torch.float64, device=self.device) for _ in range(self.N)],
             'omegas': [torch.zeros(size=(1,), dtype=torch.float64, device=self.device) for _ in range(self.N)],
-            'U_skews': self.initialize_anisotropic_U_skews(v0s),
+            # 'U_skews': self.initialize_anisotropic_U_skews(),
+            'U_skews': self.initialize_isotropic_U_skews(),
             'x0s': self.x0s,
             'v0s': v0s,
             'a0s': self.a0s,
         }
 
-    def initialize_initial_velocities(self) -> list[torch.Tensor]:
-        """Create random v0 starting points."""
-        # ---- Prior Sampling for each Gaussian --------
-        v0s = []
-        for _ in range(self.N):
-            v0 = torch.tensor([1.0, 1.0], dtype=torch.float64, device=self.device)
-            # v0 = v0 + 1.5 * torch.randn(2, dtype=torch.float64, device=self.device)
-            v0 = v0 + 3.0 * torch.abs(torch.randn(2, dtype=torch.float64, device=self.device))
-            v0.requires_grad_(True)
-            v0s.append(v0)
-            
-        return v0s
+    def initialize_initial_velocities(
+        self,
+        v_min: tuple[float, float] = (0.1, -0.5),
+        v_max: tuple[float, float] = (2.0, 5.0),
+    ) -> list[torch.Tensor]:
+        """
+        Initializes trainable velocity parameters uniformly sampled across
+        the physically plausible prior bounds [v_min, v_max].
+        """
+        return generate_bounded_velocity_ensemble(N=self.N, v_min=v_min, v_max=v_max, device=self.device)
+        # v0s = []
+        # for _ in range(self.N):
+        #     v0 = torch.tensor([1.0, 1.0], dtype=torch.float64, device=self.device)
+        #     # v0 = v0 + 1.5 * torch.randn(2, dtype=torch.float64, device=self.device)
+        #     v0 = v0 + 3.0 * torch.abs(torch.randn(2, dtype=torch.float64, device=self.device))
+        #     v0.requires_grad_(True)
+        #     v0s.append(v0)        
+        # return v0s
+        
+    def initialize_isotropic_U_skews(self):
+        return [torch.diag(torch.tensor([40.0, 40.0], dtype=torch.float64, device=self.device)) for _ in range(self.N)]        
     
-    def initialize_anisotropic_U_skews(self, v0s, eps=1.0):
+    def initialize_anisotropic_U_skews(self):
         """Initialise U_skew as diag(30, 15) + small upper-triangular noise.
 
         The 4:1 aspect ratio ensures Gaussians have a detectable rotation
@@ -343,11 +349,11 @@ class GMM_reco:
         U_skews = []
         for _ in range(self.N):
             U_k = torch.diag(diag_vals).clone()
-            if eps > 0:
-                rows, cols = torch.triu_indices(self.d, self.d, offset=1, device=self.device)
-                noise = eps * torch.randn(len(rows), dtype=torch.float64, device=self.device)
-                U_k[rows, cols] = U_k[rows, cols] + noise
+            rows, cols = torch.triu_indices(self.d, self.d, offset=1, device=self.device)
+            noise = torch.randn(len(rows), dtype=torch.float64, device=self.device)
+            U_k[rows, cols] = U_k[rows, cols] + noise
             U_skews.append(U_k)
+            
         return U_skews
     
     # ==================================================================
@@ -429,16 +435,55 @@ class GMM_reco:
                 )
     
     def _loss_trajectory(self, theta_tensor: torch.Tensor) -> torch.Tensor:
-        """Stage 1 loss: L1 distance between predicted and observed peak heights.
+        """Joint space-time trajectory loss using Directed Hausdorff (Point-to-Nearest-Curve) distance.
 
-        Uses the Hungarian algorithm for optimal peak-to-Gaussian assignment.
+        Eliminates frame-by-frame Hungarian identity swaps and creates a continuous 
+        loss surface for torchmin's L-BFGS solver.
         """
+        loss = 0.0 * theta_tensor.sum() # Retains autograd computation graph root
+        self.assigned_curve_data = [[] for _ in range(self.N)]
+        
         theta_dict = self.map_from_tensor_to_dict(theta_tensor, mode='trajectory')
         self.t_observable = self.t[self.peak_data.observable_indices]
         
+        # r_maxs_list: list of N tensors, each shape [T_obs, 2]
         r_maxs_list = self.map_velocities_to_maximising_receivers(theta_dict)
-        self._assign_peaks_hungarian(r_maxs_list)
-        return self._compute_trajectory_loss(r_maxs_list)
+        
+        # Stack predicted heights across all N components: shape [N, T_obs]
+        pred_heights = torch.stack([r_maxs_list[g][:, 1] for g in range(self.N)], dim=0)
+        
+        heights_dict = self.peak_data.get_heights_dict_non_empty()
+
+        for time_idx, time_val in enumerate(self.t_observable):
+            observed_heights = heights_dict.get(time_val.item(), [])
+            if not observed_heights:
+                continue
+                
+            obs_t = torch.tensor(
+                observed_heights, dtype=torch.float64, device=self.device
+            ).unsqueeze(1) # [H_t, 1]
+            
+            pred_t = pred_heights[:, time_idx].unsqueeze(0) # [1, N]
+            
+            # Absolute distance matrix between all observed peaks and candidate curves at frame t
+            dists = torch.abs(obs_t - pred_t) # [H_t, N]
+            
+            # Point-to-Nearest-Curve distance across all N trajectories
+            min_dists, best_curve_indices = torch.min(dists, dim=1) # [H_t]
+            
+            # Optional: Smooth L1 / Huber penalty to bound outlier influence
+            robust_dists = torch.nn.functional.smooth_l1_loss(
+                min_dists, torch.zeros_like(min_dists), beta=0.05, reduction='none'
+            )
+            
+            loss = loss + torch.sum(robust_dists)
+            
+            # Reconstruct assigned_curve_data dynamically for diagnostics
+            with torch.no_grad():
+                for h_idx, k_idx in enumerate(best_curve_indices):
+                    self.assigned_curve_data[k_idx.item()].append((time_idx, observed_heights[h_idx]))
+                    
+        return loss
     
     def map_velocities_to_maximising_receivers(
         self, 
@@ -470,44 +515,6 @@ class GMM_reco:
 
         return r_maxs_list
     
-    def _assign_peaks_hungarian(self, r_maxs_list):
-        """Assign detected peaks to predicted trajectories via the Hungarian algorithm."""
-        self.assigned_curve_data = [[] for _ in range(self.N)]
-        heights_dict = self.peak_data.get_heights_dict_non_empty()
-
-        for time_idx, time_val in enumerate(self.t_observable):
-            observed_heights = heights_dict.get(time_val.item(), [])
-            if not observed_heights:
-                continue
-            
-            # Vectorized cost matrix construction
-            obs_tensor = torch.tensor(observed_heights, dtype=torch.float64, device=self.device).unsqueeze(1)   # [H, 1]
-            pred_tensor = torch.stack([r_maxs_list[g][time_idx, 1] for g in range(self.N)]).unsqueeze(0)        # [1, N]
-            
-            dist_matrix = torch.abs(obs_tensor - pred_tensor)
-            dist_matrix = torch.where(torch.isnan(dist_matrix) | torch.isinf(dist_matrix), 1e10, dist_matrix)
-
-            row_indices, col_indices = linear_sum_assignment(dist_matrix.cpu().detach().numpy())
-            for h_idx, g_idx in zip(row_indices, col_indices):
-                self.assigned_curve_data[g_idx].append((time_idx, observed_heights[h_idx]))
-    
-    def _compute_trajectory_loss(self, r_maxs_list):
-        """Compute L1 loss between predicted and assigned receiver heights."""
-        loss = torch.tensor(0.0, dtype=torch.float64, device=self.device)
-        for k in range(self.N):
-            assignments_k = self.assigned_curve_data[k]
-            if not assignments_k:
-                continue
-            time_indices = [int(item[0]) for item in assignments_k]
-            observed_heights = torch.stack([
-                item[1] if isinstance(item[1], torch.Tensor) 
-                else torch.tensor(item[1], dtype=torch.float64, device=self.device) 
-                for item in assignments_k
-            ])
-            predicted_heights = r_maxs_list[k][time_indices, 1]
-            loss += torch.norm(predicted_heights - observed_heights, p=1)
-        return loss
-    
     # ==================================================================
     # Velocity Refinement
     # ==================================================================
@@ -531,11 +538,8 @@ class GMM_reco:
             for g in range(self.N)
         ]
         self.assigned_peak_values = self.peak_data.assigned_values
-        
-        if self.save_diagnostics:
-            self._plot_assignment_diagnostics()
-
         soln_dict["v0s"] = [v0.clone().detach() for v0 in self._newton_raphson_refinement(soln_dict)]
+        
         return soln_dict
 
     def _assign_peaks_to_trajectories(self, r_maxs_list: list[torch.Tensor]) -> None:
@@ -606,7 +610,6 @@ class GMM_reco:
 
         # Return total scalar absolute derivative sum across time steps
         return torch.sum(torch.abs(R_k))
-    
 
     # ==================================================================
     # Stage 1.5 – omega grid search
@@ -864,6 +867,10 @@ class GMM_reco:
 
         return F.huber_loss(sim_projs_processed, proj_data_observable, delta=0.3)
 
+    # ==================================================================
+    # Helper Functions
+    # ==================================================================
+    
     def construct_soln_dict(
         self, 
         res, 
@@ -891,10 +898,6 @@ class GMM_reco:
                 soln_dict[key] = [v.clone() for v in value]
 
         return soln_dict
-
-    # ==================================================================
-    # Parameter Serialization (Pure Functions Without Side-Effects)
-    # ==================================================================
 
     def map_from_dict_to_tensor(
         self, 
@@ -1017,22 +1020,10 @@ class GMM_reco:
         
     def _plot_stage1_diagnostics(self, best_res: dict) -> None:
         from .visualization.diagnostics import (
-            # plot_assignment_quality,
             plot_gmm_and_projections,
             plot_heights_by_assignment,
-            # plot_raw_receiver_heights,
-            # plot_trajectory_estimations,
-            # plot_trajectory_fitting,
         )
-        # plot_assignment_quality(model=self, res=best_res)
         plot_gmm_and_projections(model=self, res=best_res, theta_true=getattr(self, "theta_true", None))
-        plot_heights_by_assignment(self)
-        # plot_raw_receiver_heights(self)
-        # plot_trajectory_estimations(model=self, res=best_res)
-        # plot_trajectory_fitting(model=self, res=best_res)
-        
-    def _plot_assignment_diagnostics(self):
-        from .visualization.diagnostics import plot_heights_by_assignment
         plot_heights_by_assignment(self)
 
     def _clone_dict(self, d):
@@ -1054,3 +1045,59 @@ class GMM_reco:
         if isinstance(obj, dict):
             return {k: self._to_device(v) for k, v in obj.items()}
         return obj
+    
+    
+        # def _loss_trajectory(self, theta_tensor: torch.Tensor) -> torch.Tensor:
+    #     """Stage 1 loss: L1 distance between predicted and observed peak heights.
+
+    #     Uses the Hungarian algorithm for optimal peak-to-Gaussian assignment.
+    #     """
+    #     theta_dict = self.map_from_tensor_to_dict(theta_tensor, mode='trajectory')
+    #     self.t_observable = self.t[self.peak_data.observable_indices]
+        
+    #     r_maxs_list = self.map_velocities_to_maximising_receivers(theta_dict)
+    #     with torch.no_grad():
+    #         self._assign_peaks_hungarian(r_maxs_list)
+        
+    #     loss = torch.tensor(0.0, dtype=torch.float64, device=self.device)
+    #     for k in range(self.N):
+    #         assignments_k = self.assigned_curve_data[k]
+    #         if not assignments_k:
+    #             continue
+            
+    #         time_indices = [int(item[0]) for item in assignments_k]
+    #         observed_heights = torch.stack([
+    #             item[1] if isinstance(item[1], torch.Tensor) 
+    #             else torch.tensor(item[1], dtype=torch.float64, device=self.device) 
+    #             for item in assignments_k
+    #         ])
+            
+    #         predicted_heights = r_maxs_list[k][time_indices, 1]
+    #         diff = predicted_heights - observed_heights
+    #         loss = loss + torch.norm(diff, p=1)
+    #         # loss = loss + torch.nn.functional.smooth_l1_loss(diff, torch.zeros_like(diff), beta=0.1, reduction='sum')
+        
+    #     return loss
+    
+    
+    
+        # def _assign_peaks_hungarian(self, r_maxs_list) -> None:
+    #     """Assign detected peaks to predicted trajectories via the Hungarian algorithm."""
+    #     self.assigned_curve_data = [[] for _ in range(self.N)]
+    #     heights_dict = self.peak_data.get_heights_dict_non_empty()
+
+    #     for time_idx, time_val in enumerate(self.t_observable):
+    #         observed_heights = heights_dict.get(time_val.item(), [])
+    #         if not observed_heights:
+    #             continue
+            
+    #         # Vectorized cost matrix construction
+    #         obs_tensor = torch.tensor(observed_heights, dtype=torch.float64, device=self.device).unsqueeze(1)   # [H, 1]
+    #         pred_tensor = torch.stack([r_maxs_list[g][time_idx, 1] for g in range(self.N)]).unsqueeze(0)        # [1, N]
+            
+    #         dist_matrix = torch.abs(obs_tensor - pred_tensor)
+    #         dist_matrix = torch.where(torch.isnan(dist_matrix) | torch.isinf(dist_matrix), 1e10, dist_matrix) 
+            
+    #         row_indices, col_indices = linear_sum_assignment(dist_matrix.cpu().detach().numpy())
+    #         for h_idx, g_idx in zip(row_indices, col_indices):
+    #             self.assigned_curve_data[g_idx].append((time_idx, observed_heights[h_idx]))

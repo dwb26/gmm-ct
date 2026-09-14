@@ -11,6 +11,12 @@ from .reconstruct import run_reconstruction
 from .analysis import run_analysis
 from .tomography_solver.solver_pipeline import GMMTomographySolver
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -130,7 +136,6 @@ def _run_experiment_cmd(args) -> Path:
     
     return exp_dir
 
-
 def _run_simulate_cmd(args) -> Path:
     """Run the simulation component.
     Run as  
@@ -148,7 +153,6 @@ def _run_simulate_cmd(args) -> Path:
     
     return exp_dir
 
-
 def _run_reconstruct_cmd(args) -> GMMTomographySolver:
     """Run the reconstruction component.
     Run as
@@ -163,7 +167,6 @@ def _run_reconstruct_cmd(args) -> GMMTomographySolver:
     
     return run_reconstruction(cfg)
 
-
 def _run_analysis_cmd(args) -> Path:
     """Run the analysis component.
     Run as
@@ -176,7 +179,6 @@ def _run_analysis_cmd(args) -> Path:
     run_analysis(exp_dir, cfg)
     
     return exp_dir
-
 
 def _apply_cli_overrides(cfg, args) -> None:
     if args.device:

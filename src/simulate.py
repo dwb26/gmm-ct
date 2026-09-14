@@ -1,20 +1,12 @@
 """
 Synthetic data simulation for GMM-CT.
 
-Generates projection data from a ground-truth GMM and saves it alongside
-the true parameters so that the data can later be fed into the
-reconstruction pipeline without coupling to the reconstruction code.
+Generates projection data from a ground-truth object and saves it.
 """
 
 import logging
 from datetime import datetime
 from pathlib import Path
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
 
 import torch
 
@@ -47,16 +39,14 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
     n_proj = cfg.physics.n_projections
     t = torch.linspace(0.0, cfg.physics.duration, cfg.physics.n_projections, 
                        dtype=torch.float64, device=device)
+    snr_db = 1e+08
+    if cfg.add_sino_noise:
+        snr_db = cfg.snr_db  
 
     # --- Simulate the ground truth parameters ---
-    v_base = torch.tensor(
-        cfg.physics.initial_velocities, dtype=torch.float64, device=device
-    )
-    # generate_true_param also takes x0, v0, a0 base vectors
     theta_true = generate_true_param(
         d=d, N=N, 
         initial_location=x0s[0], 
-        initial_velocity=v_base,    # Gets perturbed by noise to provide different true v0s
         initial_acceleration=a0s[0], 
         min_rot=omega_min, 
         max_rot=omega_max, 
@@ -64,16 +54,11 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
     )
     
     # --- Setup output directory ---
-    snr_db = 1e+08
-    if cfg.add_sino_noise:
-        snr_db = cfg.snr_db
-        
     out_dir = Path(cfg.output.directory)
     if getattr(cfg.output, "use_timestamp", False):
         folder_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_seed{cfg.seed}_N{N}"
     else:
-        folder_name = f"seed{cfg.seed}_N{N}_nproj{n_proj}_snr{snr_db}"
-    
+        folder_name = f"seed{cfg.seed}_N{N}_nproj{n_proj}_snr{snr_db}"    
     exp_dir = out_dir / folder_name
     exp_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Saving to: {exp_dir}")
@@ -131,15 +116,15 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
     )
 
     # --- Visualizations ---
-    if cfg.analysis.skip_animations:
-        pass
-    else:
-        logger.info(f"Generating the plots and animations...")
-        animate_simulation(
-            sim_dir=exp_dir,
-            output_path=exp_dir / 'simulation_2d.mp4',
-        )
-    export_poster_gmm_figure(exp_dir)
-    export_poster_snapshot_sinogram_figure(exp_dir)
+    # if cfg.analysis.skip_animations:
+    #     pass
+    # else:
+    #     logger.info(f"Generating the plots and animations...")
+    #     animate_simulation(
+    #         sim_dir=exp_dir,
+    #         output_path=exp_dir / 'simulation_2d.mp4',
+    #     )
+    # export_poster_gmm_figure(exp_dir)
+    # export_poster_snapshot_sinogram_figure(exp_dir)
 
     return exp_dir
