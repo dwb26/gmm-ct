@@ -13,11 +13,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import scipy.signal
 import torch
 import torch.nn.functional as F
 from torchmin import minimize
+import matplotlib.pyplot as plt
 
-from .utils import generate_bounded_velocity_ensemble, NewtonRaphsonLBFGS
+from .utils import generate_velocity_ensemble, NewtonRaphsonLBFGS, compute_dataset_identifiability
 from .structures import PeakData
 
 logger = logging.getLogger(__name__)
@@ -38,8 +40,7 @@ class GMM_reco:
         exp_dir: str,                           # Directory for diagnostic plots.
         device: str = "cpu",                    # Computation device (auto-detected when None).
         save_diagnostics: bool = True,          # Save diagnostic plots at the end of Stage 1
-        fitted_gaussian_params: dict[float, torch.Tensor] | None = None,
-        peak_detection_records: pd.DataFrame | None = None,
+        peak_detection_method: str = "gaussian_fit"
     ):
         self.d = d
         self.N = N
@@ -48,17 +49,16 @@ class GMM_reco:
         self.omega_min = omega_min
         self.omega_max = omega_max
         self.n_traj_trials = 10 * N
-        self.n_omega_inits = 5 * N
+        self.n_omega_inits = 1 * N
         self.save_diagnostics = save_diagnostics
         self.t_observable = []
-        self.fitted_gaussian_params = fitted_gaussian_params
-        self.peak_detection_records = peak_detection_records
+        self.peak_detection_method = peak_detection_method
 
         # Device
         self.device = (
             torch.device(device) if device is not None
             else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        )        
+        )
 
         # Experiment directory
         self.exp_dir = Path(exp_dir) if exp_dir else Path('data/results')
@@ -124,7 +124,8 @@ class GMM_reco:
 
         # Stage 1: Trajectory Optimization
         soln_dict = self._stage_trajectory_optimization(t, proj_data)
-        self.theta_pre_stage1_5 = self._clone_dict(soln_dict)
+        self.theta_pre_stage1_5 = self.theta_dict_init
+        self.theta_pre_stage1_5["v0s"] = self.best_init
 
         # Stage 1.5a: Grid Search for Angular Velocities (ω)
         soln_dict = self._stage_omega_initialization(soln_dict)
@@ -137,111 +138,6 @@ class GMM_reco:
         soln_dict = self._stage_multistart_joint(soln_dict, warm_start=True)
 
         return soln_dict
-
-    # ==================================================================
-    # Forward model
-    # ==================================================================
-    
-    def generate_projections(
-        self, 
-        t: torch.Tensor, 
-        theta_dict: dict[str, list[torch.Tensor]], 
-        loss_type: str | None = None
-    ) -> list[torch.Tensor]:
-        """Vectorized forward calculation of X-ray projection series."""
-        if loss_type is not None:
-            theta_dict = {**self.theta_fixed, **theta_dict}
-
-        rot_mats = self._compute_2d_rotation_matrices(t, theta_dict)    # [N, T, d, d]
-        trajs = self._compute_trajectories(t, theta_dict)               # [N, T, d]
-
-        projs = [
-            torch.zeros(len(t), self.n_rcvrs, dtype=torch.float64, device=self.device)
-            for _ in range(self.n_sources)
-        ]
-        EPS = 1e-10
-
-        for n_s, source in enumerate(self.sources):
-            receivers = torch.stack(self.receivers[n_s])                    # [R, d]
-            r_minus_s = receivers - source                                  # [R, d]
-            r_hat = r_minus_s / torch.norm(r_minus_s, dim=1, keepdim=True)  # [R, d]
-
-            for n in range(self.N):
-                alpha_n = theta_dict["alphas"][n].squeeze()
-                U_n = theta_dict["U_skews"][n]                              # [d, d]
-                
-                # Batch transform shape matrix: U_n_t = U_n @ R_n(t)^T
-                U_n_t = torch.matmul(U_n, rot_mats[n].transpose(-1, -2))    # [T, d, d]
-
-                # Project ray directions & trajectory offset
-                # U_r_hat: [T, R, d], U_r: [T, R, d], U_traj: [T, 1, d]
-                U_r_hat = torch.matmul(r_hat, U_n_t.transpose(-1, -2))
-                U_r = torch.matmul(r_minus_s, U_n_t.transpose(-1, -2))
-                s_minus_mu = source - trajs[n] # [T, d]
-                U_traj = torch.matmul(s_minus_mu.unsqueeze(1), U_n_t.transpose(-1, -2))
-
-                norm_r_hat = torch.norm(U_r_hat, dim=-1) # [T, R]
-                quotient = (self.sqrt_pi * alpha_n) / (norm_r_hat + EPS)
-
-                inner_prod_sq = torch.sum(U_r * U_traj, dim=-1)**2          # [T, R]
-                divisor = torch.sum(U_r**2, dim=-1) + EPS
-                subtractor = torch.sum(U_traj**2, dim=-1)
-
-                exp_arg = (inner_prod_sq / divisor) - subtractor
-                projs[n_s] += quotient * torch.exp(exp_arg)
-
-        return projs
-    
-    def _compute_2d_rotation_matrices(
-        self, 
-        t: torch.Tensor,
-        theta: dict[str, list[torch.Tensor]],
-    ) -> torch.Tensor:
-        """Compute rotation matrix stacks for all Gaussians across time vector t."""
-        T = len(t) if t.dim() > 0 else 1
-        t_vec = t.reshape(-1)
-        two_pi = 2.0 * math.pi
-        
-        rot_stack = []
-        for n in range(self.N):
-            omega_n = theta["omegas"][n]
-            R_n = torch.eye(self.d, dtype=torch.float64, device=self.device).repeat(T, 1, 1)
-            
-            for idx, omega in enumerate(omega_n):
-                i, j = torch.combinations(torch.arange(self.d, device=self.device), r=2)[idx]
-                angles = two_pi * omega * t_vec
-                cos_a, sin_a = torch.cos(angles), torch.sin(angles)
-                
-                R_plane = torch.eye(self.d, dtype=torch.float64, device=self.device).repeat(T, 1, 1)
-                R_plane[:, i, i] = cos_a
-                R_plane[:, i, j] = -sin_a
-                R_plane[:, j, i] = sin_a
-                R_plane[:, j, j] = cos_a
-                
-                R_n = torch.bmm(R_n, R_plane)
-            rot_stack.append(R_n)
-            
-        return torch.stack(rot_stack)   # [N, T, d, d]      
-    
-    def _compute_trajectories(
-        self,
-        t: torch.Tensor,
-        theta: dict[str, list[torch.Tensor]],
-    ) -> torch.Tensor:
-        """Compute position vectors for all Gaussians across time vector t."""
-        t_vec = t.unsqueeze(-1) if t.dim() > 0 else t   # [T, 1]
-        trajs = []
-        for n in range(self.N):
-            x0, v0, a0 = theta["x0s"][n], theta["v0s"][n], theta["a0s"][n]
-            trajs.append(x0 + v0 * t_vec + 0.5 * a0 * (t_vec**2))
-        return torch.stack(trajs)   # [N, T, d]
-        
-    def process_projections(
-        self, 
-        projections: list[torch.Tensor]
-    ) -> torch.Tensor:
-        """Flatten multi-source projection lists to a unified 2D tensor."""
-        return projections[0] if self.n_sources == 1 else torch.cat(projections, dim=0)
 
     # ==================================================================
     # Stage 1 – trajectory optimization
@@ -261,11 +157,15 @@ class GMM_reco:
         }
         logger.info("Running %d trajectory multi-start trials", self.n_traj_trials)
 
-        errors, results = [], []
-        self.peak_detection(t, proj_data)
+        self.peak_detection(proj_data=proj_data, t=t)
+        self.theta_dict_init = self.initialize_parameters()
+        
+        errors, results, init_values = [], [], []
         for _ in range(self.n_traj_trials):
-            self.theta_dict_init = self.initialize_parameters()
             
+            # Initialize the velocities specific to the trial
+            self.theta_dict_init["v0s"] = self.initialize_initial_velocities()
+            init_values.append(self.theta_dict_init["v0s"])
             for v0_n in self.theta_dict_init["v0s"]:
                 v0_n.requires_grad_(True)
 
@@ -280,7 +180,9 @@ class GMM_reco:
             errors.append(res_trial.fun)
             results.append(res_trial)
 
-        best_res = results[np.argmin(np.array(errors))]
+        best_idx = np.argmin(np.array(errors))
+        self.best_init = init_values[best_idx]
+        best_res = results[best_idx]
         soln_dict = self.construct_soln_dict(best_res)
 
         if 'v0s' not in soln_dict:
@@ -291,9 +193,8 @@ class GMM_reco:
 
         soln_dict["v0s"] = [v0_n.clone().detach() for v0_n in soln_dict["v0s"]]
         soln_dict = self.refine_initial_velocities_via_newton_raphson(soln_dict, best_res)
-
-        soln_dict["omegas"] = [omega.clone().detach() for omega in self.theta_dict_init["omegas"]]
         soln_dict["alphas"] = [alpha.clone().detach() for alpha in self.theta_dict_init["alphas"]]
+        soln_dict["omegas"] = [omega.clone().detach() for omega in self.theta_dict_init["omegas"]]        
         soln_dict["U_skews"] = self.initialize_anisotropic_U_skews()
 
         return soln_dict        
@@ -303,29 +204,21 @@ class GMM_reco:
     # ==================================================================
     
     def initialize_parameters(self) -> None:
-        """Initialize all GMM parameters before Stage 1 optimization."""
-        v0s = self.initialize_initial_velocities()
+        """Initialize all non-velocity GMM parameters before Stage 1 optimization."""
         return {
-            # "alphas": [torch.tensor([12.5], dtype=torch.float64, device=self.device) for _ in range(self.N)],
             "alphas": [torch.tensor([10.], dtype=torch.float64, device=self.device) for _ in range(self.N)],
             'omegas': [torch.zeros(size=(1,), dtype=torch.float64, device=self.device) for _ in range(self.N)],
-            # 'U_skews': self.initialize_anisotropic_U_skews(),
             'U_skews': self.initialize_isotropic_U_skews(),
             'x0s': self.x0s,
-            'v0s': v0s,
             'a0s': self.a0s,
         }
 
-    def initialize_initial_velocities(
-        self,
-        v_min: tuple[float, float] = (0.1, -0.5),
-        v_max: tuple[float, float] = (2.0, 5.0),
-    ) -> list[torch.Tensor]:
+    def initialize_initial_velocities(self) -> list[torch.Tensor]:
         """
         Initializes trainable velocity parameters uniformly sampled across
         the physically plausible prior bounds [v_min, v_max].
         """
-        return generate_bounded_velocity_ensemble(N=self.N, v_min=v_min, v_max=v_max, device=self.device)
+        return generate_velocity_ensemble(N=self.N, device=self.device)
         # v0s = []
         # for _ in range(self.N):
         #     v0 = torch.tensor([1.0, 1.0], dtype=torch.float64, device=self.device)
@@ -336,7 +229,7 @@ class GMM_reco:
         # return v0s
         
     def initialize_isotropic_U_skews(self):
-        return [torch.diag(torch.tensor([40.0, 40.0], dtype=torch.float64, device=self.device)) for _ in range(self.N)]        
+        return [torch.diag(torch.tensor([35.0, 35.0], dtype=torch.float64, device=self.device)) for _ in range(self.N)]        
     
     def initialize_anisotropic_U_skews(self):
         """Initialise U_skew as diag(30, 15) + small upper-triangular noise.
@@ -345,7 +238,7 @@ class GMM_reco:
         signature in the projections.  Noise on the off-diagonal helps the
         optimizer recover the true off-diagonal shape.
         """
-        diag_vals = torch.tensor([30.0, 15.0], dtype=torch.float64, device=self.device)
+        diag_vals = torch.tensor([35.0, 20.0], dtype=torch.float64, device=self.device)
         U_skews = []
         for _ in range(self.N):
             U_k = torch.diag(diag_vals).clone()
@@ -357,32 +250,32 @@ class GMM_reco:
         return U_skews
     
     # ==================================================================
-    # Trajectory Traversal & Hungarian Loss
+    # Peak Detection & Trajectory Loss Function
     # ==================================================================
     
     def peak_detection(
         self,
-        t: torch.Tensor,
         proj_data: list[torch.Tensor] | torch.Tensor,
+        t: torch.Tensor,
     ) -> None:
         """Detect projection peaks and create random v0 starting points."""
         self.peak_data = PeakData(self.N, self.device)
         proj_data_array = proj_data[0] if isinstance(proj_data, list) else proj_data
         
-        if getattr(self, "fitted_gaussian_params", None) is None:
+        # Detect with respect to the chosen method
+        if self.peak_detection_method == "sliding_window":
             logger.info(f"Detecting peaks using the sliding window approach...")
-            self._sliding_window_peak_detection(proj_data_array, self.receivers[0], t)
-        else:
+            self._sliding_window_peak_detection(proj_data_array, t)
+        elif self.peak_detection_method == "gaussian_fit":
             logger.info(f"Detecting peaks using the Gaussian fit approach...")
-            self._gaussian_fit_peak_detection()
-                
+            self._gaussian_fit_peak_detection(proj_data_array, t)
+                            
         self.peak_data.finalize_detections()
         self._create_legacy_aliases()
         
     def _sliding_window_peak_detection(
         self, 
         proj_data: list[torch.Tensor], 
-        receivers: list[list[torch.Tensor]], 
         t: torch.Tensor
     ) -> None:
         """Detect peaks across all time steps via 3-point sliding window."""
@@ -395,7 +288,7 @@ class GMM_reco:
             for offset in range(self.n_rcvrs - 2):
                 idx_center = self.n_rcvrs - 2 - offset
                 if projection[idx_center + 1] < projection[idx_center] > projection[idx_center - 1]:
-                    receiver_pos = receivers[idx_center]
+                    receiver_pos = self.receivers[0][idx_center][1]
                     self.peak_data.add_peak_detection(
                         time_idx=time_idx,
                         time_val=time_val,
@@ -411,11 +304,80 @@ class GMM_reco:
                     
             self.peak_data.add_time_detections(time_val.item(), detected_heights)
             
-    def _gaussian_fit_peak_detection(self):
-        pdr = self.peak_detection_records.copy()
+    def _gaussian_fit_peak_detection(
+        self, 
+        proj_tensor: torch.Tensor, 
+        t: torch.Tensor,
+    ) -> None:
+        
+        # Extract receiver 1D positions as a clean float64 tensor on the same device
+        rcv_coords = torch.tensor(
+            [r[1] for r in self.receivers[0]], dtype=torch.float64, device=self.device
+        )
+
+        fitted_gaussian_params = {}
+        records = []
+        # data = []
+
+        for n_p, proj_row in enumerate(proj_tensor):
+            params = self.fit_gmm_1d_fixed_N(
+                proj_row=proj_row,
+                receiver_coords=rcv_coords,
+            )
+
+            if len(params) > 0:
+                params = params[params[:, 1] > 0.075]
+                
+                time_val_scalar = (
+                    t[n_p].item() if isinstance(t[n_p], torch.Tensor) else float(t[n_p])
+                )
+
+                mu = params[:, 0]
+                A = params[:, 1]
+                sigma = params[:, 2]
+
+                # data.append(
+                #     {
+                #         "time_idx": int(n_p),
+                #         "time_val": time_val_scalar,
+                #         "mu": mu.detach().cpu(),
+                #         "A": A.detach().cpu(),
+                #         "sigma": sigma.detach().cpu(),
+                #     }
+                # )
+
+                detected_heights = []
+
+                # Unroll per-Gaussian components so peak records maintain 1-to-1 row structure
+                for n_d in range(len(params)):
+                    mu_k = mu[n_d].item()
+                    A_k = A[n_d].item()
+                    sigma_k = sigma[n_d].item()
+
+                    detected_heights.append(mu_k)
+
+                    # Nearest receiver index on spatial grid
+                    rcv_idx = torch.argmin(torch.abs(mu[n_d] - rcv_coords)).item()
+
+                    records.append(
+                        {
+                            "time_idx": int(n_p),
+                            "time_val": time_val_scalar,
+                            "receiver_idx": int(rcv_idx),
+                            "receiver_pos": float(rcv_coords[rcv_idx].item()),
+                            "mu": float(mu_k),
+                            "peak_val": float(A_k),
+                            "sigma": float(sigma_k),
+                            "gaussian_idx": int(n_d),
+                        }
+                    )
+
+                fitted_gaussian_params[time_val_scalar] = detected_heights
+
+        pdr = pd.DataFrame(records)
         pdr_times = pdr['time_val'].to_numpy(dtype=np.float64)
         
-        for time_val, detected_heights in self.fitted_gaussian_params.items():
+        for time_val, detected_heights in fitted_gaussian_params.items():
             t_val_float = time_val.item() if isinstance(time_val, torch.Tensor) else float(time_val)
             self.peak_data.add_time_detections(t_val_float, detected_heights)
             
@@ -433,6 +395,92 @@ class GMM_reco:
                     peak_val=float(row.peak_val),
                     gaussian_idx=int(row.gaussian_idx),
                 )
+        
+    def fit_gmm_1d_fixed_N(
+        self,
+        proj_row: torch.Tensor, 
+        receiver_coords: torch.Tensor, 
+        min_amplitude_threshold: float = 1e-4,
+        l1_reg: float = 1e-5,   # Drives unused Gaussians strictly to A = 0
+    ) -> torch.Tensor:
+        """Fits fixed N 1D Gaussians to a single timeframe sinogram.
+        Attenuates non-present modeled Gaussians by setting A = 0.
+        """
+        dtype = torch.float64
+        proj_row = proj_row.to(dtype=dtype)
+        receiver_coords = receiver_coords.to(device=self.device, dtype=dtype)
+
+        r_min, r_max = receiver_coords.min(), receiver_coords.max()
+        r_span = r_max - r_min
+        
+        # 1. Initialize mu raw values via inverse sigmoid
+        proj_np = proj_row.detach().cpu().numpy()
+        min_height = 0.1 * proj_np.max()    # Filter out low background noise spikes
+        peaks_idx, _ = scipy.signal.find_peaks(proj_np, height=min_height)
+        if len(peaks_idx) > 0:
+            mu_found = receiver_coords[peaks_idx]
+            
+            # Fill remaining allocation slots up to N uniformly if len(mu_found) < N
+            if len(mu_found) < self.N:
+                pad = torch.linspace(r_min + 0.1 * r_span, r_max - 0.1 * r_span, self.N - len(mu_found), 
+                                     device=self.device, dtype=dtype)
+                mu_init = torch.cat([mu_found, pad])
+            else:
+                mu_init = mu_found[:self.N]
+        else:
+            mu_init = torch.linspace(r_min + 0.1 * r_span, r_max - 0.1 * r_span, self.N, 
+                                     device=self.device, dtype=dtype)
+        
+        mu_raw_init = torch.logit(((mu_init - r_min) / r_span).clamp(1e-4, 1 - 1e-4))
+
+        # 2. Initialization for other parameters (A and sigma)
+        target_A = max((0.5 * (proj_row.min() + proj_row.max()) / self.N).item(), 1e-3)
+        # Since A = relu(p_A)^2, p_A_init = sqrt(target_A)
+        A_raw_init = torch.full((self.N,), torch.sqrt(torch.tensor(target_A, dtype=dtype, device=self.device)))
+        
+        sigma = torch.tensor(0.15, device=self.device, dtype=dtype)
+        log_sigma_init = torch.full((self.N,), torch.log(sigma).item(), device=self.device, dtype=dtype)
+
+        params = torch.cat([A_raw_init, mu_raw_init, log_sigma_init]).requires_grad_(True)
+        r = receiver_coords.unsqueeze(1)  # [R, 1]
+
+        def loss_fn(p):
+            A = F.relu(p[:self.N]) ** 2
+            
+            # Sigmoid parameterization guarantees mu in (r_min, r_max)
+            mu = r_min + r_span * torch.sigmoid(p[self.N:2*self.N])
+            sigma = torch.exp(p[2*self.N:]) + 1e-4
+            
+            diff = (r - mu) / sigma
+            pred = torch.sum(A * torch.exp(-0.5 * (diff ** 2)), dim=1)
+            
+            # MSE loss + L1 penalty on amplitudes to force unused components to zero
+            mse = torch.mean((pred - proj_row) ** 2)
+            penalty = l1_reg * torch.sum(A)        
+            return mse + penalty
+
+        res = minimize(
+            loss_fn, 
+            params, 
+            method='l-bfgs', 
+            options={'max_iter': 5000, 'gtol': 1e-6, 'disp': False}
+        )
+        
+        p_opt = res.x
+        
+        # Extract optimized parameters
+        A_opt = F.relu(p_opt[:self.N]) ** 2
+        mu_opt = r_min + r_span * torch.sigmoid(p_opt[self.N:2*self.N])
+        sigma_opt = torch.exp(p_opt[2*self.N:]) + 1e-4
+        
+        # Hard-zero out any numerical sub-threshold noise residual
+        A_opt = torch.where(A_opt < min_amplitude_threshold, torch.zeros_like(A_opt), A_opt)
+
+        # Spatial sort
+        sort_idx = torch.argsort(mu_opt)
+        params = torch.stack([mu_opt[sort_idx], A_opt[sort_idx], sigma_opt[sort_idx]], dim=1)
+        
+        return params    
     
     def _loss_trajectory(self, theta_tensor: torch.Tensor) -> torch.Tensor:
         """Joint space-time trajectory loss using Directed Hausdorff (Point-to-Nearest-Curve) distance.
@@ -447,7 +495,7 @@ class GMM_reco:
         self.t_observable = self.t[self.peak_data.observable_indices]
         
         # r_maxs_list: list of N tensors, each shape [T_obs, 2]
-        r_maxs_list = self.map_velocities_to_maximising_receivers(theta_dict)
+        r_maxs_list = self.velocities_to_modes_forward_model(theta_dict)
         
         # Stack predicted heights across all N components: shape [N, T_obs]
         pred_heights = torch.stack([r_maxs_list[g][:, 1] for g in range(self.N)], dim=0)
@@ -485,7 +533,7 @@ class GMM_reco:
                     
         return loss
     
-    def map_velocities_to_maximising_receivers(
+    def velocities_to_modes_forward_model(
         self, 
         theta_dict: dict[str, list[torch.Tensor]],
     ) -> list[torch.Tensor]:
@@ -525,7 +573,7 @@ class GMM_reco:
         res: dict,
     ) -> dict[str, list[torch.Tensor]]:
         """Refine v0 via Newton-Raphson root finding."""
-        r_maxs_list = self.map_velocities_to_maximising_receivers(self.map_from_tensor_to_dict(res.x))
+        r_maxs_list = self.velocities_to_modes_forward_model(self.map_from_tensor_to_dict(res.x))
         self._assign_peaks_to_trajectories(r_maxs_list)
 
         # Build format expected by diagnostic plots
@@ -632,15 +680,6 @@ class GMM_reco:
             "Stage 1.5a: Residual-sinogram ω grid search (%d plane(s), %d candidates)",
             n_planes, n_grid,
         )
-        
-        theta_true = getattr(self, 'theta_true', None)
-        if theta_true is not None and 'omegas' in theta_true:
-            for k, omega_true_k in enumerate(theta_true['omegas']):
-                logger.debug(
-                    "  Gaussian %d: ω_true = [%s] Hz", 
-                    k, ', '.join(f'{w.item():.4f}' for w in omega_true_k.flatten())
-                )
-                
         proj_obs = self.proj_data
         t = self.t
         omega_candidates = torch.linspace(
@@ -696,13 +735,6 @@ class GMM_reco:
                 omega_n[plane_idx] = best_val_n
                 
             soln_dict["omegas"][n] = omega_n
-            
-            omega_str = ', '.join(f'{w.item():.4f}' for w in soln_dict['omegas'][n])
-            if theta_true is not None and 'omegas' in theta_true:
-                omega_true_str = ', '.join(f'{w.item():.4f}' for w in theta_true['omegas'][n].flatten())
-                logger.info("  Gaussian %d: ω_est = [%s] Hz | ω_true = [%s] Hz", n, omega_str, omega_true_str)
-            else:
-                logger.info("  Gaussian %d: ω = [%s] Hz", n, omega_str)
 
         return soln_dict
         
@@ -755,15 +787,6 @@ class GMM_reco:
         soln_dict["alphas"] = [
             alpha_hat[n].reshape(1).detach().clone() for n in range(self.N)
         ]
-        
-        theta_true = getattr(self, 'theta_true', None)
-        if theta_true is not None and 'alphas' in theta_true:
-            est_str = ', '.join(f'{alpha_hat[n].item():.3f}' for n in range(self.N))
-            true_str = ', '.join(f'{theta_true["alphas"][n].item():.3f}' for n in range(self.N))
-            logger.info("  α_est  = [%s]", est_str)
-            logger.info("  α_true = [%s]", true_str)
-        else:
-            logger.info("  α = %s", [f'{alpha_hat[n].item():.3f}' for n in range(self.N)])
         logger.info("  NNLS residual ‖Φα − p_obs‖₂ = %.4e", residual)
 
         return soln_dict
@@ -779,8 +802,7 @@ class GMM_reco:
     ) -> dict[str, list[torch.Tensor]]:
         """Multi-start L-BFGS joint optimization to refine α, U_skew, and ω."""
         logger.info("Stage 2: Multi-start joint optimization")
-        n_trials = self.n_omega_inits or 5
-        logger.info("Running %d optimization trial(s)", n_trials)
+        logger.info("Running %d optimization trials", self.n_omega_inits)
 
         initial_alphas = [a.clone().detach() for a in soln_dict['alphas']]
         initial_U_skews = [U.clone().detach() for U in soln_dict['U_skews']]
@@ -795,7 +817,7 @@ class GMM_reco:
         }
 
         all_losses, all_results = [], []
-        for trial_idx in range(n_trials):
+        for trial_idx in range(self.n_omega_inits):
             if warm_start and trial_idx == 0:
                 initial_omegas = [w.clone().detach() for w in soln_dict['omegas']]
             else:
@@ -832,12 +854,6 @@ class GMM_reco:
             all_losses.append(final_loss)
             all_results.append(result_dict)
 
-            logger.info(
-                "  Trial %d/%d: loss = %.6e | ω = [%s] Hz",
-                trial_idx + 1, n_trials, final_loss,
-                ', '.join(f'{w.item():.3f}' for w in result_dict['omegas']),
-            )
-
         best_idx = int(np.argmin(all_losses))
         best_result = all_results[best_idx]
         best_loss = all_losses[best_idx]
@@ -866,6 +882,152 @@ class GMM_reco:
         proj_data_observable = self.proj_data[self.peak_data.observable_indices]
 
         return F.huber_loss(sim_projs_processed, proj_data_observable, delta=0.3)
+    
+    # ==================================================================
+    # Forward model
+    # ==================================================================
+    
+    def evaluate_density(
+        self,
+        t: torch.Tensor,
+        positions: torch.Tensor,
+        theta_dict: dict[str, list[torch.Tensor]],
+    ) -> torch.Tensor:
+        """Evaluate the object-space GMM density ρ(x,t) = Σₙ αₙ exp(−½‖Uₙ(t)(x − μₙ(t))‖²).
+
+        Parameters
+        ----------
+        t : torch.Tensor, shape [T]
+            Time points at which to evaluate the density.
+        positions : torch.Tensor, shape [P, d]
+            Flat spatial evaluation points (shared across all times).
+        theta_dict : dict
+            Parameter dictionary with keys 'x0s', 'v0s', 'a0s', 'omegas', 'alphas', 'U_skews'.
+
+        Returns
+        -------
+        torch.Tensor, shape [T, P]
+            Density evaluated at every (time, position) pair.
+        """
+        rot_mats = self._compute_2d_rotation_matrices(t, theta_dict)   # [N, T, d, d]
+        trajs = self._compute_trajectories(t, theta_dict)              # [N, T, d]
+
+        T = len(t) if t.dim() > 0 else 1
+        density = torch.zeros(T, positions.shape[0], dtype=torch.float64, device=self.device)
+
+        for n in range(self.N):
+            alpha_n = theta_dict["alphas"][n].squeeze()
+            U_n = theta_dict["U_skews"][n]                                    # [d, d]
+            U_n_t = torch.matmul(U_n, rot_mats[n].transpose(-1, -2))          # [T, d, d]
+
+            deviations = positions.unsqueeze(0) - trajs[n].unsqueeze(1)       # [T, P, d]
+            U_dev = torch.matmul(deviations, U_n_t.transpose(-1, -2))         # [T, P, d]
+            quad_form = torch.sum(U_dev ** 2, dim=-1)                         # [T, P]
+
+            density = density + alpha_n * torch.exp(-0.5 * quad_form)
+
+        return density
+    
+    def generate_projections(
+        self, 
+        t: torch.Tensor, 
+        theta_dict: dict[str, list[torch.Tensor]], 
+        loss_type: str | None = None
+    ) -> list[torch.Tensor]:
+        """Vectorized forward calculation of X-ray projection series."""
+        if loss_type is not None:
+            theta_dict = {**self.theta_fixed, **theta_dict}
+
+        rot_mats = self._compute_2d_rotation_matrices(t, theta_dict)    # [N, T, d, d]
+        trajs = self._compute_trajectories(t, theta_dict)               # [N, T, d]
+
+        projs = [
+            torch.zeros(len(t), self.n_rcvrs, dtype=torch.float64, device=self.device)
+            for _ in range(self.n_sources)
+        ]
+        EPS = 1e-10
+
+        for n_s, source in enumerate(self.sources):
+            receivers = torch.stack(self.receivers[n_s])                    # [R, d]
+            r_minus_s = receivers - source                                  # [R, d]
+            r_hat = r_minus_s / torch.norm(r_minus_s, dim=1, keepdim=True)  # [R, d]
+
+            for n in range(self.N):
+                alpha_n = theta_dict["alphas"][n].squeeze()
+                U_n = theta_dict["U_skews"][n]                              # [d, d]
+                
+                # Batch transform shape matrix: U_n_t = U_n @ R_n(t)^T
+                U_n_t = torch.matmul(U_n, rot_mats[n].transpose(-1, -2))    # [T, d, d]
+
+                # Project ray directions & trajectory offset
+                # U_r_hat: [T, R, d], U_r: [T, R, d], U_traj: [T, 1, d]
+                U_r_hat = torch.matmul(r_hat, U_n_t.transpose(-1, -2))
+                U_r = torch.matmul(r_minus_s, U_n_t.transpose(-1, -2))
+                s_minus_mu = source - trajs[n] # [T, d]
+                U_traj = torch.matmul(s_minus_mu.unsqueeze(1), U_n_t.transpose(-1, -2))
+
+                norm_r_hat = torch.norm(U_r_hat, dim=-1) # [T, R]
+                quotient = (self.sqrt_pi * alpha_n) / (norm_r_hat + EPS)
+
+                inner_prod_sq = torch.sum(U_r * U_traj, dim=-1)**2          # [T, R]
+                divisor = torch.sum(U_r**2, dim=-1) + EPS
+                subtractor = torch.sum(U_traj**2, dim=-1)
+
+                exp_arg = (inner_prod_sq / divisor) - subtractor
+                projs[n_s] += quotient * torch.exp(exp_arg)
+
+        return projs
+    
+    def _compute_2d_rotation_matrices(
+        self, 
+        t: torch.Tensor,
+        theta: dict[str, list[torch.Tensor]],
+    ) -> torch.Tensor:
+        """Compute rotation matrix stacks for all Gaussians across time vector t."""
+        T = len(t) if t.dim() > 0 else 1
+        t_vec = t.reshape(-1)
+        two_pi = 2.0 * math.pi
+        
+        rot_stack = []
+        for n in range(self.N):
+            omega_n = theta["omegas"][n]
+            R_n = torch.eye(self.d, dtype=torch.float64, device=self.device).repeat(T, 1, 1)
+            
+            for idx, omega in enumerate(omega_n):
+                i, j = torch.combinations(torch.arange(self.d, device=self.device), r=2)[idx]
+                angles = two_pi * omega * t_vec
+                cos_a, sin_a = torch.cos(angles), torch.sin(angles)
+                
+                R_plane = torch.eye(self.d, dtype=torch.float64, device=self.device).repeat(T, 1, 1)
+                R_plane[:, i, i] = cos_a
+                R_plane[:, i, j] = -sin_a
+                R_plane[:, j, i] = sin_a
+                R_plane[:, j, j] = cos_a
+                
+                R_n = torch.bmm(R_n, R_plane)
+            rot_stack.append(R_n)
+            
+        return torch.stack(rot_stack)   # [N, T, d, d]      
+    
+    def _compute_trajectories(
+        self,
+        t: torch.Tensor,
+        theta: dict[str, list[torch.Tensor]],
+    ) -> torch.Tensor:
+        """Compute position vectors for all Gaussians across time vector t."""
+        t_vec = t.unsqueeze(-1) if t.dim() > 0 else t   # [T, 1]
+        trajs = []
+        for n in range(self.N):
+            x0, v0, a0 = theta["x0s"][n], theta["v0s"][n], theta["a0s"][n]
+            trajs.append(x0 + v0 * t_vec + 0.5 * a0 * (t_vec**2))
+        return torch.stack(trajs)   # [N, T, d]
+        
+    def process_projections(
+        self, 
+        projections: list[torch.Tensor]
+    ) -> torch.Tensor:
+        """Flatten multi-source projection lists to a unified 2D tensor."""
+        return projections[0] if self.n_sources == 1 else torch.cat(projections, dim=0)
 
     # ==================================================================
     # Helper Functions
@@ -1005,10 +1167,27 @@ class GMM_reco:
 
         return theta_dict
 
-
     # ==================================================================
     # Internal utilities
     # ==================================================================
+    
+    def compute_dataset_identifiability_score(
+        self, 
+        proj_tensor: torch.Tensor, 
+        t: torch.Tensor,
+        theta_dict: dict[str, list[torch.Tensor]],
+    ) -> dict[str, float]:
+        """Designed to be called during data simulation."""
+        self.peak_detection(proj_data=proj_tensor, t=t)
+        self.theta_fixed = {
+            'x0s': [x0.clone().detach() for x0 in self.x0s],
+            'a0s': [a0.clone().detach() for a0 in self.a0s],
+        }
+        t_device = t.to(self.device) if isinstance(t, torch.Tensor) else torch.tensor(t, device=self.device)
+        self.t_observable = t_device[self.peak_data.observable_indices].to(self.device)
+        r_maxs_gt = self.velocities_to_modes_forward_model(theta_dict)
+        
+        return compute_dataset_identifiability(r_maxs_list=r_maxs_gt)
     
     def _create_legacy_aliases(self):
         """Set model attributes expected by diagnostic plotting functions."""
@@ -1047,57 +1226,83 @@ class GMM_reco:
         return obj
     
     
-        # def _loss_trajectory(self, theta_tensor: torch.Tensor) -> torch.Tensor:
-    #     """Stage 1 loss: L1 distance between predicted and observed peak heights.
+    # --- 2. Diagnostic Spatial Profile Plots ---
+    # data_df = pd.DataFrame(data)
+    # out_dir = exp_dir / "fitted_plots"
+    # out_dir.mkdir(parents=True, exist_ok=True)
 
-    #     Uses the Hungarian algorithm for optimal peak-to-Gaussian assignment.
-    #     """
-    #     theta_dict = self.map_from_tensor_to_dict(theta_tensor, mode='trajectory')
-    #     self.t_observable = self.t[self.peak_data.observable_indices]
-        
-    #     r_maxs_list = self.map_velocities_to_maximising_receivers(theta_dict)
-    #     with torch.no_grad():
-    #         self._assign_peaks_hungarian(r_maxs_list)
-        
-    #     loss = torch.tensor(0.0, dtype=torch.float64, device=self.device)
-    #     for k in range(self.N):
-    #         assignments_k = self.assigned_curve_data[k]
-    #         if not assignments_k:
-    #             continue
-            
-    #         time_indices = [int(item[0]) for item in assignments_k]
-    #         observed_heights = torch.stack([
-    #             item[1] if isinstance(item[1], torch.Tensor) 
-    #             else torch.tensor(item[1], dtype=torch.float64, device=self.device) 
-    #             for item in assignments_k
-    #         ])
-            
-    #         predicted_heights = r_maxs_list[k][time_indices, 1]
-    #         diff = predicted_heights - observed_heights
-    #         loss = loss + torch.norm(diff, p=1)
-    #         # loss = loss + torch.nn.functional.smooth_l1_loss(diff, torch.zeros_like(diff), beta=0.1, reduction='sum')
-        
-    #     return loss
-    
-    
-    
-        # def _assign_peaks_hungarian(self, r_maxs_list) -> None:
-    #     """Assign detected peaks to predicted trajectories via the Hungarian algorithm."""
-    #     self.assigned_curve_data = [[] for _ in range(self.N)]
-    #     heights_dict = self.peak_data.get_heights_dict_non_empty()
+    # rcv_coords_np = rcv_coords.cpu().numpy()
+    # time_vals_in_df = data_df["time_val"].to_numpy(dtype=np.float64)
 
-    #     for time_idx, time_val in enumerate(self.t_observable):
-    #         observed_heights = heights_dict.get(time_val.item(), [])
-    #         if not observed_heights:
-    #             continue
-            
-    #         # Vectorized cost matrix construction
-    #         obs_tensor = torch.tensor(observed_heights, dtype=torch.float64, device=self.device).unsqueeze(1)   # [H, 1]
-    #         pred_tensor = torch.stack([r_maxs_list[g][time_idx, 1] for g in range(self.N)]).unsqueeze(0)        # [1, N]
-            
-    #         dist_matrix = torch.abs(obs_tensor - pred_tensor)
-    #         dist_matrix = torch.where(torch.isnan(dist_matrix) | torch.isinf(dist_matrix), 1e10, dist_matrix) 
-            
-    #         row_indices, col_indices = linear_sum_assignment(dist_matrix.cpu().detach().numpy())
-    #         for h_idx, g_idx in zip(row_indices, col_indices):
-    #             self.assigned_curve_data[g_idx].append((time_idx, observed_heights[h_idx]))
+    # for n_p, proj_row in enumerate(proj_tensor):
+    #     time_val_scalar = (
+    #         t[n_p].item() if isinstance(t[n_p], torch.Tensor) else float(t[n_p])
+    #     )
+
+    #     if np.any(np.isclose(time_vals_in_df, time_val_scalar, atol=1e-8)):
+    #         fig, ax = plt.subplots(figsize=(8, 4))
+
+    #         # True projection curve
+    #         ax.plot(
+    #             rcv_coords_np,
+    #             proj_row.cpu().numpy(),
+    #             label="True",
+    #             lw=3,
+    #             color="black",
+    #             alpha=0.3,
+    #         )
+
+    #         # Retrieve row matching frame time
+    #         sub_df = data_df[
+    #             np.isclose(time_vals_in_df, time_val_scalar, atol=1e-8)
+    #         ].iloc[0]
+
+    #         mu = sub_df["mu"].to(device=device)
+    #         A = sub_df["A"].to(device=device)
+    #         sigma = sub_df["sigma"].to(device=device)
+
+    #         # Vectorized 2D GMM evaluation: [R, 1] - [K] -> [R, K]
+    #         diff = rcv_coords.unsqueeze(1) - mu.unsqueeze(0)
+    #         y_fit = torch.sum(A * torch.exp(-0.5 * (diff / sigma) ** 2), dim=1)
+
+    #         ax.plot(
+    #             rcv_coords_np,
+    #             y_fit.cpu().numpy(),
+    #             label="GMM Fit",
+    #             color="crimson",
+    #             linestyle="--",
+    #             lw=1.8,
+    #         )
+
+    #         ax.set_title(f"Time: {time_val_scalar:.3f} s (Frame {n_p})")
+    #         ax.set_xlabel("Receiver Position")
+    #         ax.set_ylabel("Amplitude")
+    #         ax.legend(loc="upper right")
+
+    #         plt.savefig(out_dir / f"obs_{n_p:03d}.png", dpi=150, bbox_inches="tight")
+    #         plt.close(fig)
+
+    # # --- 3. Trajectory Time-Series Plot ---
+    # if not peak_detection_records.empty:
+    #     fig, ax = plt.subplots(figsize=(8, 5))
+
+    #     # Filter out negligible amplitude noise components
+    #     valid_peaks = peak_detection_records[peak_detection_records["peak_val"] > 1e-4]
+
+    #     ax.scatter(
+    #         valid_peaks["time_val"],
+    #         valid_peaks["mu"],
+    #         c=valid_peaks["peak_val"],
+    #         cmap="viridis",
+    #         s=15,
+    #         alpha=0.8,
+    #         edgecolors="none",
+    #     )
+
+    #     ax.set_xlabel("Time (s)")
+    #     ax.set_ylabel("Fitted Mean Position (μ)")
+    #     ax.set_title("Peak Trajectories Over Time")
+    #     ax.grid(True, linestyle=":", alpha=0.6)
+
+    #     plt.savefig(exp_dir / "time_series.png", dpi=150, bbox_inches="tight")
+    #     plt.close(fig)

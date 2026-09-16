@@ -9,9 +9,13 @@ from datetime import datetime
 from pathlib import Path
 
 import torch
+import yaml
 
 from .config import ExperimentConfig
-from .utils import export_parameters, generate_true_param, set_random_seeds, add_sinogram_noise
+from .utils import (export_parameters, 
+                    generate_true_param, 
+                    set_random_seeds, 
+                    add_sinogram_noise,)
 from .model import GMM_reco
 from .visualization.simulate_viz import (animate_simulation,
                                          export_poster_gmm_figure,
@@ -58,7 +62,7 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
     if getattr(cfg.output, "use_timestamp", False):
         folder_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_seed{cfg.seed}_N{N}"
     else:
-        folder_name = f"seed{cfg.seed}_N{N}_nproj{n_proj}_snr{snr_db}"    
+        folder_name = f"snr{snr_db}_N{N}_nproj{n_proj}_seed{cfg.seed}"
     exp_dir = out_dir / folder_name
     exp_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Saving to: {exp_dir}")
@@ -93,18 +97,28 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
     # --- Save ground truth ---
     torch.save(
         {
-            "theta_true": theta_true,
+            # Raw parameter dictionary for direct metric evaluation
+            "params": {
+                "v0s": theta_true['v0s'],           # Shape: [N, 2]
+                "x0s": theta_true['x0s'],           # Shape: [N, 2]
+                "a0s": theta_true['a0s'],           # Shape: [N, 2]
+                "alphas": theta_true['alphas'],     # Shape: [N]
+                "omegas": theta_true['omegas'],     # Shape: [N]
+                "U_skews": theta_true['U_skews'],   # Shape: [N, 2, 2]
+            },
+            "theta_true": theta_true,  # Full flattened parameter vector
             "sources": sources,
             "receivers": receivers,
             "config": {
                 "d": d,
                 "N": N,
                 "seed": cfg.seed,
-                "omega_min": omega_min,
-                "omega_max": omega_max,
+                "snr_db": cfg.snr_db,
                 "n_projections": n_proj,
                 "duration": cfg.physics.duration,
                 "device": str(device),
+                "omega_min": omega_min,
+                "omega_max": omega_max,
             },
         },
         exp_dir / "ground_truth.pt",
@@ -114,6 +128,41 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
         exp_dir / "true_parameters.md",
         title="Ground Truth Parameters",
     )
+    
+    # --- Compute & Save Dataset Identifiability Score ---
+    identifiability_dict = model.compute_dataset_identifiability_score(
+        proj_tensor=proj_tensor,
+        t=t,
+        theta_dict=theta_true,
+    )
+    
+    # Assign difficulty regime classification
+    i_min = identifiability_dict.get("I_min", float('inf'))
+    if i_min > 2.0:
+        regime = "Regime A (Fully Identifiable)"
+    elif i_min >= 1.0:
+        regime = "Regime B (Partially Identifiable)"
+    else:
+        regime = "Regime C (Severely Unidentifiable)"
+
+    identifiability_data = {
+        "regime": regime,
+        "metrics": identifiability_dict,
+        "parameters": {
+            "N": N,
+            "n_projections": n_proj,
+            "snr_db": snr_db,
+            "seed": cfg.seed,
+        }
+    }
+    
+    ident_file = exp_dir / "identifiability.yaml"
+    with open(ident_file, "w") as f:
+        yaml.dump(identifiability_data, f, default_flow_style=False, sort_keys=False)
+    
+    logger.info(f"The identifiability score for this simulation is {identifiability_data['metrics']['I_min']}")
+    logger.info(f"This is rated to be {identifiability_data['regime']}")
+    logger.info(f"Saved identifiability metrics to: {ident_file}")
 
     # --- Visualizations ---
     # if cfg.analysis.skip_animations:
@@ -123,7 +172,7 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
     #     animate_simulation(
     #         sim_dir=exp_dir,
     #         output_path=exp_dir / 'simulation_2d.mp4',
-    #     )
+        # )
     # export_poster_gmm_figure(exp_dir)
     # export_poster_snapshot_sinogram_figure(exp_dir)
 

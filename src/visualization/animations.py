@@ -4,6 +4,7 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from pathlib import Path
 from matplotlib.animation import FuncAnimation
 from matplotlib.patches import Circle, Ellipse
 
@@ -86,26 +87,31 @@ def _get_gaussian_parameters(theta_true, k):
 
 
 def _compute_precision_matrix(theta_true, k, current_time, sources, rcvrs, d, K):
-    """Compute the precision matrix for the k-th Gaussian at current time."""
-    from ..model import GMM_reco
+    """Compute the object-space precision matrix U(t)^T U(t) for the k-th Gaussian at current_time.
 
-    # Get rotation matrices
-    # Extract x0s and a0s from theta_true (they are known physical parameters)
-    x0s = theta_true['x0s']
-    a0s = theta_true['a0s']
-    GMM = GMM_reco(d, K, sources, rcvrs, x0s, a0s, omega_min=0.0, omega_max=10.0)
-    rot_mat_funcs = GMM.construct_rotation_matrix_funcs()
-    rot_mat_of_t = rot_mat_funcs(current_time, theta_true)
-    kth_rot_mat_of_t = rot_mat_of_t[k]
-    
-    # Precision matrix calculation with proper tensor-to-numpy conversion
+    U(t) = U_k @ R_k(t)^T, matching GMM_reco.evaluate_density / generate_projections.
+    """
     U_k = theta_true["U_skews"][k]
-    U_k_np = U_k.detach().numpy() if isinstance(U_k, torch.Tensor) else U_k
-    kth_rot_mat_of_t_np = (kth_rot_mat_of_t.detach().numpy() 
-                          if isinstance(kth_rot_mat_of_t, torch.Tensor) 
-                          else kth_rot_mat_of_t)
-    
-    U_kR_kT = U_k_np @ (kth_rot_mat_of_t_np.T)
+    U_k_np = U_k.detach().cpu().numpy() if isinstance(U_k, torch.Tensor) else np.asarray(U_k)
+
+    omega_k = theta_true["omegas"][k]
+    omega_np = omega_k.detach().cpu().numpy() if isinstance(omega_k, torch.Tensor) else np.asarray(omega_k)
+    t_val = current_time.item() if isinstance(current_time, torch.Tensor) else float(current_time)
+
+    # Product of plane rotations by 2*pi*omega*t, matching GMM_reco._compute_2d_rotation_matrices
+    R = np.eye(d)
+    pair_idx = 0
+    for i in range(d):
+        for j in range(i + 1, d):
+            angle = 2.0 * np.pi * omega_np[pair_idx] * t_val
+            cos_a, sin_a = np.cos(angle), np.sin(angle)
+            R_plane = np.eye(d)
+            R_plane[i, i], R_plane[i, j] = cos_a, -sin_a
+            R_plane[j, i], R_plane[j, j] = sin_a, cos_a
+            R = R @ R_plane
+            pair_idx += 1
+
+    U_kR_kT = U_k_np @ R.T
     precision_mat = (U_kR_kT.T) @ U_kR_kT
     
     return precision_mat
@@ -1476,3 +1482,68 @@ def save_optimization_stages_animation(theta_true, theta_init, theta_after_traj,
     
     return anim
 
+
+def plot_density(
+    exp_dir: Path,
+    sources: list[torch.Tensor],
+    receivers: list[torch.Tensor],
+    N: int,
+    d: int,
+    t: torch.Tensor,
+    n_proj: int,
+    rho_true: torch.Tensor | None = None,
+    rho_est: torch.Tensor | None = None,
+    gt_params: dict[list[torch.Tensor]] | None = None,
+    est_params: dict[list[torch.Tensor]] | None = None,
+    x_min: float = -1.0,
+    x_max: float = 4.0,
+    y_min: float = -3.0,
+    y_max: float = 1.0,
+):
+
+    colors = plt.cm.rainbow(np.linspace(0, 1, N))
+    
+    if gt_params is not None:
+        trajectories_true = _compute_trajectories(gt_params, N, d, t)
+    if est_params is not None:
+        trajectories_est = _compute_trajectories(est_params, N, d, t)
+
+    sensecheck_dir = Path(exp_dir) / "density_sensecheck"
+    sensecheck_dir.mkdir(parents=True, exist_ok=True)
+    frame_indices = range(n_proj)
+
+    for n_p in frame_indices:
+        current_time = t[n_p]
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        _plot_acquisition_geometry_in_animation(ax, sources=sources, receivers=receivers, d=d)
+        
+        if rho_true is not None:
+            ax.imshow(
+                rho_true[n_p].T.cpu().detach().numpy(),
+                extent=[x_min, x_max, y_min, y_max],
+                origin='lower', cmap='viridis', alpha=0.85,
+            )
+        if trajectories_true is not None:
+            _plot_gaussian_ellipses(
+                ax, trajectories_true, n_p, gt_params, current_time,
+                N, sources, receivers, d, colors, style='true',
+            )
+            
+        if rho_est is not None:
+            ax.imshow(
+                rho_true[n_p].T.cpu().detach().numpy(),
+                extent=[x_min, x_max, y_min, y_max],
+                origin='lower', cmap='viridis', alpha=0.85,
+            )
+        if trajectories_est is not None:
+            _plot_gaussian_ellipses(
+                ax, trajectories_est, n_p, est_params, current_time,
+                N, sources, receivers, d, colors, style='estimated',
+            )
+        ax.set_title(f"Object-space density sense-check (t = {current_time.item():.3f}s)")
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
+        fig.savefig(sensecheck_dir / f"frame_{n_p:03d}.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)

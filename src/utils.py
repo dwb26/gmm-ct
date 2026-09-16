@@ -57,43 +57,43 @@ def construct_receivers(device=None, *args):
             f"Expected a tuple of length 4 (2D) or 7 (3D), got {len(params)}."
         )
 
-
 # ==========================================================================
 # Ground-truth parameter generation
 # ==========================================================================
 
-def generate_bounded_velocity_ensemble(
+def generate_velocity_ensemble(
     N: int,
-    v_min: tuple[float, float] = (0.1, -0.5),
-    v_max: tuple[float, float] = (2.0, 5.0),
-    alpha: float = 0.1,         # Memory factor (0 = independent, 1 = constant)
+    mean: tuple[float, float] = (1.0, 1.0),
+    std: tuple[float, float] = (0.5, 2.0),
     device: torch.device = torch.device('cpu'),
-    sample_choice: int = 100,
+    max_attempts: int = 1000,
 ) -> list[torch.Tensor]:
-    """
-    Generates N velocity vectors using a bounded mean-reverting process
-    to maintain organic variability while mitigating particle trajectory overlap.
+    """Generates N independent velocity vectors sampled from a 2D diagonal Normal distribution.
+    
+    Rejects samples where v_x <= 0 to ensure forward motion along the x-axis.
     """
     dtype = torch.float64
-    v_min_t = torch.tensor(v_min, dtype=dtype, device=device)
-    v_max_t = torch.tensor(v_max, dtype=dtype, device=device)
-    
-    # Latent state initialized at center (0.0 maps to midpoint in sigmoid space)
-    z = torch.zeros(len(v_min_t), dtype=dtype, device=device)
-    step_std_vec = torch.tensor([0.5, 1.5], dtype=dtype, device=device)
+    mu = torch.tensor(mean, dtype=dtype, device=device)
+    sigma = torch.tensor(std, dtype=dtype, device=device)
     
     v0s = []
-    for n in range(1, sample_choice * (N + 1)):
-        # Mean-reverting random walk step in latent space
-        noise = torch.randn(2, dtype=dtype, device=device) * step_std_vec
-        z = alpha * z + noise
+    attempts = 0
+    
+    while len(v0s) < N and attempts < max_attempts:
+        attempts += 1
+        # Sample independent (v_x, v_y) from bivariate normal
+        v_sample = mu + sigma * torch.randn(2, dtype=dtype, device=device)
         
-        # Sigmoidal mapping to physical velocity bounds [v_min, v_max]
-        shape = (1,)
-        v_k = v_min_t + (v_max_t - v_min_t) * torch.sigmoid(z) 
-        + torch.tensor([.1, .1], dtype=dtype, device=device) * (torch.randint(0, 2, shape) * 2 - 1)
-        if n % sample_choice == 0:
-            v0s.append(v_k)
+        # Simple rejection rule: keep only forward x-velocities
+        if v_sample[0] > 0.0:
+            v_sample.requires_grad_(True)
+            v0s.append(v_sample)
+            
+    if len(v0s) < N:
+        raise RuntimeError(
+            f"Could not generate {N} valid velocities with v_x > 0 after {max_attempts} attempts. "
+            f"Consider increasing mean[0] or std[0]."
+        )
         
     return v0s
 
@@ -109,8 +109,8 @@ def generate_particle_morphology(
     
     for _ in range(N):
         for _ in range(500):
-            # Sample diagonal in range [10.0, 40.0]
-            U_n_diag = torch.rand(size=(d,), dtype=dtype, device=device) * 30.0 + 10.0
+            # Sample diagonal in range [20.0, 50.0]
+            U_n_diag = torch.rand(size=(d,), dtype=dtype, device=device) * 30.0 + 20.0
 
             # Reject isotropic or near-spherical Gaussians
             if (U_n_diag.max() / U_n_diag.min()).item() < min_diag_ratio:
@@ -146,7 +146,7 @@ def generate_true_param(
     initial_acceleration: torch.Tensor, 
     min_rot: float, 
     max_rot: float,
-    device: torch.device | None = None, 
+    device: torch.device = torch.device('cpu'), 
 ) -> dict[str, list[torch.tensor]]:
     """Generate a complete set of synthetic GMM parameters for testing.
 
@@ -160,9 +160,6 @@ def generate_true_param(
     dict
         Keys: ``'alphas', 'U_skews', 'omegas', 'x0s', 'v0s', 'a0s'``.
     """
-    if device is None:
-        device = torch.device('cpu')
-
     if len(initial_location) != d:
         raise ValueError("initial_location must have length d.")
     if len(initial_acceleration) != d:
@@ -185,14 +182,13 @@ def generate_true_param(
         for _ in range(N)
     ]
 
-    # Trajectory parameters
+    # ---- Trajectory parameters
     x0s = [initial_location.to(torch.float64) for _ in range(N)]
-    v0s = generate_bounded_velocity_ensemble(N)
+    v0s = generate_velocity_ensemble(N)
     a0s = [initial_acceleration.to(torch.float64) for _ in range(N)]
 
     return {"alphas": alphas, "U_skews": U_ns, "omegas": omegas,
             "x0s": x0s, "v0s": v0s, "a0s": a0s}
-
 
 # ==========================================================================
 # Helpers
@@ -344,8 +340,52 @@ def add_sinogram_noise(
     if is_list:
         return [noisy_tensor[i] for i in range(noisy_tensor.shape[0])]
     return noisy_tensor
-    
 
+def compute_dataset_identifiability(
+    r_maxs_list: list[torch.Tensor],
+    sigmas_list: list[torch.Tensor] | None = None,
+    default_sigma: float = 0.05,
+) -> dict[str, float]:
+    """Computes peak separability metrics aggregated across all pairs and time steps.
+
+    Returns:
+        dict containing:
+            - 'I_min': Global minimum separability (used for Regime A/B/C classification).
+            - 'I_mean': Mean separability across all pairs and time steps.
+            - 'overlap_fraction': Ratio of time frames with overlapping peaks (I < 1.0).
+    """
+    N = len(r_maxs_list)
+    if N <= 1:
+        return {"I_min": float('inf'), "I_mean": float('inf'), "overlap_fraction": 0.0}     # Single particle is trivially identifiable
+    
+    T = r_maxs_list[0].shape[0]
+    
+    # Extract modes into a single tensor: shape [N, T]
+    mus = torch.stack([r_maxs_list[i][:, 1] for i in range(N)], dim=0)
+    
+    if sigmas_list is not None:
+        sigmas = torch.stack([sigmas_list[i] for i in range(N)], dim=0)
+    else:
+        sigmas = torch.full_like(mus, default_sigma)
+
+    # Vectorized pairwise upper-triangular indices
+    i_idx, j_idx = torch.triu_indices(N, N, offset=1)
+    
+    # Pairwise separability matrix across all pairs and time steps: shape [N_pairs, T]
+    delta_mu = torch.abs(mus[i_idx, :] - mus[j_idx, :])     # [N_pairs, T]
+    sum_sigma = sigmas[i_idx, :] + sigmas[j_idx, :]         # [N_pairs, T]
+    
+    separability_matrix = delta_mu / sum_sigma              # [N_pairs, T]
+    
+    I_min = separability_matrix.min().item()
+    I_mean = separability_matrix.mean().item()
+    overlap_fraction = (separability_matrix < 1.0).float().mean().item()
+
+    return {
+        "I_min": I_min,
+        "I_mean": I_mean,
+        "overlap_fraction": overlap_fraction,
+    }
 
 # ==========================================================================
 # L-BFGS root-finding solver (used by Newton-Raphson velocity refinement)

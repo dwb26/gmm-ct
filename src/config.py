@@ -10,7 +10,6 @@ from typing import List, Optional, Tuple, Union
 import torch
 import yaml
 
-
 GRAVITATIONAL_ACCELERATION = 9.81  # m/s²
 
 

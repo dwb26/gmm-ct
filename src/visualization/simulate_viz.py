@@ -629,10 +629,10 @@ def animate_simulation(
                 ax_xz.plot(centroids[k, :, 0], centroids[k, :, 2],
                            color=colors[k], lw=1.5, alpha=0.6, linestyle='--', zorder=3)
 
-        legend_elems = [Patch(facecolor=colors[k], edgecolor='black',
-                              label=f'$\\rho_{{{k+1}}}$') for k in range(N)]
-        ax_xy.legend(handles=legend_elems, loc='upper left',
-                     fontsize=13, framealpha=0.9)
+        # legend_elems = [Patch(facecolor=colors[k], edgecolor='black',
+                            #   label=f'$\\rho_{{{k+1}}}$') for k in range(N)]
+        # ax_xy.legend(handles=legend_elems, loc='upper left',
+                    #  fontsize=13, framealpha=0.9)
 
         # Detector heatmap
         # frame.reshape(n_y, n_z): rows=y (y_max at row 0 due to CT flip), cols=z
@@ -741,8 +741,8 @@ def animate_simulation(
 
     legend_elems = [Patch(facecolor=colors[k], edgecolor='black',
                           label=f'$\\rho_{{{k+1}}}$') for k in range(N)]
-    ax_left.legend(handles=legend_elems, loc='upper left',
-                   fontsize=13, framealpha=0.9)
+    # ax_left.legend(handles=legend_elems, loc='upper left',
+                #    fontsize=13, framealpha=0.9)
 
     if show_trajectories:
         plot_trajectories_single(ax_left, theta_true, t, N, colors, mirror=False)

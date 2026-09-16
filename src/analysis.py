@@ -9,10 +9,168 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
+# Prevent truncation of columns and expand terminal display width
 from .config import AnalysisConfig, ExperimentConfig
 from .model import GMM_reco
 
+from .visualization.publication import (
+    animate_temporal_gmm_comparison,
+    plot_acquisition_geometry_exact,
+    plot_individual_gaussian_reconstruction,
+    plot_temporal_gmm_comparison,
+    plot_projection_modes,
+    plot_sinogram,
+    reorder_theta_to_match_true,
+)
+
 logger = logging.getLogger(__name__)
+
+
+def compute_spatial_mesh(
+    resolution: int,
+    x_min: float = -1.0,
+    x_max: float = 5.0,
+    y_min: float = -3.0,
+    y_max: float = 3.0,
+):
+    device = 'cpu'
+    xs = torch.linspace(x_min, x_max, resolution, dtype=torch.float64, device=device)
+    ys = torch.linspace(y_min, y_max, resolution, dtype=torch.float64, device=device)
+    grid_x, grid_y = torch.meshgrid(xs, ys, indexing="ij")
+
+    positions = torch.stack([grid_x.reshape(-1), grid_y.reshape(-1)], dim=1)  # [P, 2]
+
+    # Cell area and per-time trapezoidal weights for the spatio-temporal quadrature
+    dx = (x_max - x_min) / (resolution - 1)
+    dy = (y_max - y_min) / (resolution - 1)
+    cell_area = dx * dy
+    
+    return positions, cell_area
+
+def compute_integrated_l2_density(
+    exp_dir: Path,
+    gt_dict: dict,
+    gt_params: dict, 
+    est_params: dict | None = None,
+    resolution: int = 200,
+) -> tuple[float, float]:
+    """Computes spatio-temporal L2 density errors in a single pass.
+    
+    Returns:
+        Tuple[float, float]: (absolute_l2_error, relative_l2_error)
+    """
+    d = gt_dict['config']['d']
+    N = gt_dict['config']['N']
+    sources, receivers = gt_dict['sources'], gt_dict['receivers']
+    x0s, a0s = gt_dict['params']['x0s'], gt_dict['params']['a0s']
+    omega_min, omega_max = gt_dict['config']['omega_min'], gt_dict['config']['omega_max']
+    duration = gt_dict['config']['duration']
+    n_proj = gt_dict['config']['n_projections']
+    
+    t = torch.linspace(0.0, duration, n_proj, dtype=torch.float64, device='cpu')
+    
+    model = GMM_reco(
+        d=d, N=N, 
+        sources=sources, receivers=receivers, 
+        x0s=x0s, a0s=a0s,
+        omega_min=omega_min, omega_max=omega_max, 
+        exp_dir=exp_dir,
+    )
+    
+    positions, cell_area = compute_spatial_mesh(resolution)
+    
+    rho_true = model.evaluate_density(t=t, theta_dict=gt_params, positions=positions)
+    rho_true = rho_true.reshape(t.shape[0], resolution, resolution)
+    
+    if est_params is not None:
+        rho_est = model.evaluate_density(t=t, theta_dict=est_params, positions=positions)
+        rho_est = rho_est.reshape(t.shape[0], resolution, resolution)
+    else:
+        rho_est = torch.zeros_like(rho_true)
+
+    # Absolute spatio-temporal L2 error
+    sq_error_per_time = torch.sum((rho_true - rho_est) ** 2, dim=(1, 2)) * cell_area
+    abs_l2_error = torch.trapezoid(sq_error_per_time, t).item()
+    
+    # Baseline ground-truth L2 norm
+    sq_gt_per_time = torch.sum(rho_true ** 2, dim=(1, 2)) * cell_area
+    gt_energy = torch.trapezoid(sq_gt_per_time, t).item()
+    
+    rel_l2_error = abs_l2_error / (gt_energy + 1e-12)
+    
+    return abs_l2_error, rel_l2_error
+
+def compute_run_metrics(exp_dir: Path) -> dict:
+    """Evaluates parameter and spatio-temporal density metrics for a single experiment directory."""
+    gt_path = exp_dir / "ground_truth.pt"
+    rec_path = exp_dir / "reconstruction.pt"
+
+    gt = torch.load(gt_path, map_location="cpu")
+    rec = torch.load(rec_path, map_location="cpu")
+
+    N = gt["config"]["N"]
+
+    theta_true = gt["theta_true"]
+    theta_est = rec["theta_est"]
+    theta_est_matched, _ = reorder_theta_to_match_true(theta_true, theta_est, N)
+
+    # 1. Motion Errors (Kinematic)
+    true_v0 = torch.stack(gt["params"]["v0s"])
+    est_v0 = torch.stack(theta_est_matched["v0s"])
+    v0_err = torch.sqrt(torch.sum((true_v0 - est_v0) ** 2, dim=1))  # [N]
+    v0_rmse = torch.mean(v0_err).item()
+    v0_median_err = torch.median(v0_err).item()
+
+    true_omega = torch.stack(gt["params"]["omegas"])
+    est_omega = torch.stack(theta_est_matched["omegas"])
+    omega_err = torch.abs(true_omega - est_omega)  # [N]
+    omega_rmse = torch.sqrt(torch.mean(omega_err**2)).item()
+    omega_median_err = torch.median(omega_err).item()
+
+    # 2. Morphology Errors (Static shape)
+    true_alpha = torch.stack(gt["params"]["alphas"])
+    est_alpha = torch.stack(theta_est_matched["alphas"])
+    alpha_err = torch.abs(true_alpha - est_alpha)  # [N]
+    alpha_rmse = torch.sqrt(torch.mean(alpha_err**2)).item()
+    alpha_median_err = torch.median(alpha_err).item()
+
+    true_U = torch.stack(gt["params"]["U_skews"])
+    est_U = torch.stack(theta_est_matched["U_skews"])
+    U_err = torch.sqrt(torch.sum((true_U - est_U) ** 2, dim=(1, 2)))  # [N]
+    U_rmse = torch.mean(U_err).item()
+    U_median_err = torch.median(U_err).item()
+
+    # 3. Joint Physical Density Metric
+    l2_err, rel_l2_err = compute_integrated_l2_density(
+        exp_dir=exp_dir,
+        gt_dict=gt,
+        gt_params=theta_true,
+        est_params=theta_est_matched,
+    )
+
+    return {
+        "exp_dir": str(exp_dir),
+        "N": N,
+        "n_proj": gt["config"]["n_projections"],
+        "snr_db": float(gt["config"]["snr_db"]),
+        "seed": gt["config"]["seed"],
+        # Mean/RMSE Parameter Errors
+        "v0_rmse": v0_rmse,
+        "omega_rmse": omega_rmse,
+        "alpha_rmse": alpha_rmse,
+        "U_rmse": U_rmse,
+        # Robust Median Parameter Errors
+        "v0_median_err": v0_median_err,
+        "omega_median_err": omega_median_err,
+        "alpha_median_err": alpha_median_err,
+        "U_median_err": U_median_err,
+        # Joint Spatial/Temporal Errors
+        "l2_density_error": l2_err,
+        "rel_l2_density_error": rel_l2_err,
+        "log_l2_density_error": np.log10(l2_err + 1e-12),
+        "log_rel_l2_density_error": np.log10(rel_l2_err + 1e-12),
+    }
+
     
 def run_analysis(
     exp_dir: Path,
@@ -74,16 +232,6 @@ def analyze_results(
     analysis_cfg: AnalysisConfig | None = None,
 ):
     """Compute relative parameter errors and output publication PDF plots."""
-    from .visualization.publication import (
-        animate_temporal_gmm_comparison,
-        plot_acquisition_geometry_exact,
-        plot_individual_gaussian_reconstruction,
-        plot_temporal_gmm_comparison,
-        plot_projection_modes,
-        plot_sinogram,
-        reorder_theta_to_match_true,
-    )
-
     # Match permutations: align estimated indices to true particles by trajectory
     theta_est, matching_indices = reorder_theta_to_match_true(theta_true, theta_est, N)
     logger.info("Permutation matching (est -> true): %s", matching_indices)
@@ -296,3 +444,105 @@ def _plot_error_table(errors_init, errors_final, proj_err_init, proj_err_final, 
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close()
     logger.info("Error table saved: %s", output_path)
+    
+    
+    
+    
+    # def run_large_scale_analysis(
+#     sim_dirs: list[Path],
+#     output_path: Path | None = None,
+# ) -> pd.DataFrame:
+    
+#     records = []
+#     for exp_dir in sim_dirs:
+#         logger.info(f"Analyzing for {exp_dir}...")
+        
+#         gt_path = exp_dir / "ground_truth.pt"
+#         rec_path = exp_dir / "reconstruction.pt"
+        
+#         gt = torch.load(gt_path, map_location='cpu')
+#         rec = torch.load(rec_path, map_location='cpu')
+    
+#         N = gt["config"]["N"]
+        
+#         # Extract the respective parameter dictionaries
+#         theta_true = gt["theta_true"]
+#         theta_est = rec["theta_est"]        
+#         theta_est_matched, _ = reorder_theta_to_match_true(theta_true, theta_est, N)
+        
+#         # -------------------------------------------------------------
+#         # Category 1: Kinematic / Motion Metrics (Subproblem 1)
+#         # -------------------------------------------------------------    
+#         true_v0 = torch.stack(gt["params"]["v0s"])          # [N, d]
+#         est_v0 = torch.stack(theta_est_matched["v0s"])      # [N, d]        
+#         v0_rmse = torch.sqrt(torch.mean((true_v0 - est_v0) ** 2)).item()
+        
+#         true_omega = torch.stack(gt["params"]["omegas"])          # [N]
+#         est_omega = torch.stack(theta_est_matched["omegas"])      # [N]
+#         omega_rmse = torch.sqrt(torch.mean((true_omega - est_omega) ** 2)).item()
+        
+#         # -------------------------------------------------------------
+#         # Category 2: Static Morphology Metrics (Subproblem 2)
+#         # -------------------------------------------------------------
+#         true_alpha = torch.stack(gt["params"]["alphas"])  # [N]
+#         est_alpha = torch.stack(theta_est_matched["alphas"])  # [N]
+#         alpha_rmse = torch.sqrt(torch.mean((true_alpha - est_alpha) ** 2)).item()
+
+#         true_U = torch.stack(gt["params"]["U_skews"])  # [N, d, d]
+#         est_U = torch.stack(theta_est_matched["U_skews"])  # [N, d, d]
+#         U_rmse = torch.sqrt(torch.mean((true_U - est_U) ** 2)).item()
+        
+#         # -------------------------------------------------------------
+#         # Category 3: Joint Physical Object Metric (End-to-End)
+#         # -------------------------------------------------------------
+#         # Evaluates physical density matching across spatial domain & time
+#         l2_density_error = compute_integrated_l2_density(
+#             exp_dir=exp_dir,
+#             gt_dict=gt,
+#             gt_params=theta_true, 
+#             est_params=theta_est_matched,
+#             relative=False,
+#         )
+#         rel_l2_density_error = compute_integrated_l2_density(
+#             exp_dir=exp_dir,
+#             gt_dict=gt,
+#             gt_params=theta_true,
+#             est_params=theta_est_matched,
+#             relative=True,
+#         )
+        
+#         # -------------------------------------------------------------
+#         # Aggregate Record
+#         # -------------------------------------------------------------
+#         records.append({
+#             "exp_dir": str(exp_dir),
+#             # Swept Metadata
+#             "N": N,
+#             "n_proj": gt["config"]["n_projections"],
+#             "snr_db": float(gt["config"]["snr_db"]),
+#             "seed": gt["config"]["seed"],
+#             # 1. Motion Errors
+#             "v0_rmse": v0_rmse,
+#             "omega_rmse": omega_rmse,
+#             # 2. Morphology Errors
+#             "alpha_rmse": alpha_rmse,
+#             "U_rmse": U_rmse,
+#             # 3. Joint Physical Error
+#             "l2_density_error": l2_density_error,
+#             "log_l2_density_error": np.log10(l2_density_error),
+#             "rel_log_l2_density_error": np.log10(rel_l2_density_error),
+#         })
+        
+#     df = pd.DataFrame(records)
+    
+#     pd.set_option("display.max_columns", None)
+#     pd.set_option("display.width", 1000)
+#     pd.set_option("display.max_colwidth", None)
+#     print(df.head(100))
+    
+#     if output_path:
+#         output_path.parent.mkdir(parents=True, exist_ok=True)
+#         df.to_parquet(output_path, index=False)
+#         logger.info(f"Saved benchmark metrics to {output_path}")
+        
+#     return df

@@ -1,4 +1,15 @@
-"""Command-line interface for GMM-CT."""
+"""Command-line interface for GMM-CT.
+
+Offers the full end-to-end simulate->reconstruct->anaylsis pipeline via 
+
+    python -m src.cli run --config configs/experiment.yaml
+    
+or allows each of the three steps to be called individually; i.e.
+
+    python -m src.cli simulate --config configs/experiment.yaml
+    python -m src.cli reconstruct --config configs/experiment.yaml --exp-dir data/seed1_N8_nproj150
+    python -m src.cli analysis --config configs/experiment.yaml --exp-dir data/seed1_N8_nproj150
+"""
 
 import argparse
 import logging
@@ -9,7 +20,7 @@ from .config import load_experiment_config
 from .simulate import run_simulation
 from .reconstruct import run_reconstruction
 from .analysis import run_analysis
-from .tomography_solver.solver_pipeline import GMMTomographySolver
+from .model import GMM_reco
 
 logging.basicConfig(
     level=logging.INFO,
@@ -153,7 +164,7 @@ def _run_simulate_cmd(args) -> Path:
     
     return exp_dir
 
-def _run_reconstruct_cmd(args) -> GMMTomographySolver:
+def _run_reconstruct_cmd(args) -> GMM_reco:
     """Run the reconstruction component.
     Run as
          python -m src.cli reconstruct --config configs/experiment.yaml --exp-dir data/seed1_N8_nproj150
