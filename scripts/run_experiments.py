@@ -3,6 +3,7 @@ from pathlib import Path
 import copy
 import shutil
 import pandas as pd
+import numpy as np
 
 from src.config import ExperimentConfig, load_experiment_config
 from src.simulate import run_simulation
@@ -14,10 +15,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Define Experiment Matrix ---
-SNR_LEVELS = [10.0, 15.0, 20.0, 30.0, 40.0, 80.0]
-N_GAUSSIANS = [1, 2, 3, 5, 8, 10, 15, 20, 25]
-N_PROJECTIONS = [8, 16, 32, 64, 128, 256, 512]
-SEEDS = range(1, 101)
+SNR_LEVELS = [10.0, 15.0, 20.0, 40.0, 80.0]
+N_GAUSSIANS = [1, 2, 3, 5, 8, 12, 20]
+N_PROJECTIONS = [8, 16, 32, 64, 128, 256]
+SEEDS = range(1, 26)
 # SNR_LEVELS = [10.0, 15.0, 20.0]
 # N_GAUSSIANS = [1, 2, 3]
 # N_PROJECTIONS = [8, 16, 256]
@@ -114,22 +115,36 @@ def run_experiment_pipeline(
         )
 
         try:
-            # 1. Run Simulation
             exp_dir = run_simulation(cfg)
-
-            # 2. Run Reconstruction
             run_reconstruction(cfg)
-
-            # 3. Compute Metrics directly on this run
             metrics_dict = compute_run_metrics(exp_dir)
-            records.append(metrics_dict)
+            metrics_dict['status'] = 'success'
 
-            # 4. Clean up intermediate tensor directory to prevent disk bloat
+            # Clean up intermediate tensor directory to prevent disk bloat
             if not keep_tensors:
                 shutil.rmtree(exp_dir, ignore_errors=True)
 
         except Exception as e:
             logger.error(f"Failed pipeline run for {cfg.exp_dir.name}: {e}")
+            metrics_dict = {
+                'exp_dir': str(cfg.exp_dir),
+                'N': cfg.sim_n_gaussians,
+                'n_proj': cfg.physics.n_projections,
+                'snr_db': float(cfg.snr_db),
+                'seed': cfg.seed,
+                'status': 'failed',
+                # Fill numerical errors with NaN so they don't corrupt metric calculations
+                'v0_rmse': np.nan,
+                'omega_rmse': np.nan,
+                'alpha_rmse': np.nan,
+                'U_rmse': np.nan,
+                'l2_density_error': np.nan,
+                'rel_l2_density_error': np.nan,
+                'log_l2_density_error': np.nan,
+                'log_rel_l2_density_error': np.nan,
+            }
+            
+        records.append(metrics_dict)
 
         # Batch checkpoint to Parquet
         if len(records) >= batch_size:
@@ -151,22 +166,22 @@ def main():
     figures_dir = Path("data/figures")
     
     # 1. Generate full parameter sweep matrix
-    # all_configs = generate_configs(base_config_path)
+    all_configs = generate_configs(base_config_path)
     
-    # # 2. Filter out already completed runs for automatic resumption
-    # configs_to_run = filter_completed_configs(all_configs, results_path)
+    # 2. Filter out already completed runs for automatic resumption
+    configs_to_run = filter_completed_configs(all_configs, results_path)
     
-    # if not configs_to_run:
-    #     logger.info("All experiments in the sweep are completed!")
-    #     return
+    if not configs_to_run:
+        logger.info("All experiments in the sweep are completed!")
+        return
 
-    # # 3. Stream pipeline
-    # run_experiment_pipeline(
-    #     configs=configs_to_run,
-    #     results_path=results_path,
-    #     keep_tensors=False,
-    #     batch_size=50,
-    # )
+    # 3. Stream pipeline
+    run_experiment_pipeline(
+        configs=configs_to_run,
+        results_path=results_path,
+        keep_tensors=False,
+        batch_size=50,
+    )
     
     # 4. Read Parquet results & generate plots
     generate_benchmark_plots(
