@@ -16,9 +16,6 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 # Import main classes and functions for convenient access
 from .config import (
     GRAVITATIONAL_ACCELERATION,
-    load_experiment_config,
-    ReconstructionConfig,
-    ExperimentConfig,
 )
 from .model import GMM_reco, NewtonRaphsonLBFGS
 from .utils import construct_receivers, generate_true_param, set_random_seeds, export_parameters
@@ -41,7 +38,6 @@ from .visualization.publication import (
     plot_sinogram,
     plot_projection_modes,
     plot_trajectory_comparison,
-    create_publication_figure,
     plot_projection_modes_and_trajectories,
 )
 
@@ -84,6 +80,5 @@ __all__ = [
     'plot_sinogram',
     'plot_projection_modes',
     'plot_trajectory_comparison',
-    'create_publication_figure',
     'plot_projection_modes_and_trajectories',
 ]

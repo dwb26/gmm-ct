@@ -23,7 +23,6 @@ from .publication import (
     plot_error_analysis,
     plot_sinogram_comparison,
     plot_trajectory_comparison,
-    create_publication_figure,
     plot_acquisition_geometry_exact,
 )
 from .simulate_viz import (
@@ -57,7 +56,6 @@ __all__ = [
     'plot_error_analysis',
     'plot_sinogram_comparison',
     'plot_trajectory_comparison',
-    'create_publication_figure',
     'plot_acquisition_geometry_exact',
     # Simulation output validation (2D + 3D)
     'plot_simulation_summary',

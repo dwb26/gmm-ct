@@ -16,10 +16,15 @@ import pandas as pd
 import scipy.signal
 import torch
 import torch.nn.functional as F
+from torch.nn import MSELoss
 from torchmin import minimize
 import matplotlib.pyplot as plt
 
-from .utils import generate_velocity_ensemble, NewtonRaphsonLBFGS, compute_dataset_identifiability
+from .utils import (
+    generate_velocity_ensemble, 
+    NewtonRaphsonLBFGS, 
+    compute_dataset_identifiability,
+)
 from .structures import PeakData
 
 logger = logging.getLogger(__name__)
@@ -53,6 +58,8 @@ class GMM_reco:
         self.save_diagnostics = save_diagnostics
         self.t_observable = []
         self.peak_detection_method = peak_detection_method
+        self.theta_pre_stage1_5 = None
+        self.theta_pre_stage2 = None
 
         # Device
         self.device = (
@@ -117,27 +124,127 @@ class GMM_reco:
         self, 
         proj_data: list[torch.Tensor], 
         t: torch.Tensor,
+        intermediate_initialization: bool = True,
     ) -> dict[str, list[torch.Tensor]]:
         """Execute full 4-stage optimization pipeline."""
         self.t = t.to(self.device) if isinstance(t, torch.Tensor) else torch.tensor(t, device=self.device)
         self.proj_data = self.process_projections(self._to_device(proj_data))
 
         # Stage 1: Trajectory Optimization
-        soln_dict = self._stage_trajectory_optimization(t, proj_data)
-        self.theta_pre_stage1_5 = self.theta_dict_init
-        self.theta_pre_stage1_5["v0s"] = self.best_init
+        soln_dict = self._stage_trajectory_optimization(t=t, proj_data=proj_data)
 
-        # Stage 1.5a: Grid Search for Angular Velocities (ω)
-        soln_dict = self._stage_omega_initialization(soln_dict)
-
-        # Stage 1.5b: NNLS for Amplitudes (α)
-        soln_dict = self._stage_alpha_initialization(soln_dict)
-        self.theta_pre_stage2 = self._clone_dict(soln_dict)
+        if intermediate_initialization:
+            # Stage 1.5a: Grid Search for Angular Velocities (ω)
+            soln_dict = self._stage_omega_initialization(soln_dict)
+            
+            # Stage 1.5b: NNLS for Amplitudes (α)
+            soln_dict = self._stage_alpha_initialization(soln_dict)
+            self.theta_pre_stage2 = self._clone_dict(soln_dict)
 
         # Stage 2: Multi-start Joint Refinement
-        soln_dict = self._stage_multistart_joint(soln_dict, warm_start=True)
+        soln_dict = self._stage_multistart_joint(soln_dict)
 
         return soln_dict
+    
+    def naive_fit(
+        self, 
+        proj_data: list[torch.Tensor],
+        t: torch.Tensor,
+        intermediate_initialization: bool = True,
+    ) -> dict[str, list[torch.Tensor]]:
+        """
+        Execute optimization pipeline based on the following:
+        
+            1. Least Squares trajectory optimization based on the raw projections.
+            2. (Optional) Given trajectories, initialize for rotation and attenuation.
+            3. Optimizing for all morphology and rotation parameters using Huber loss.
+            
+        """
+        logger.info("Stage 1: Naive trajectory optimization")
+        soln_dict = self._stage_lstsq_trajectory_optimization(proj_data=proj_data, t=t)
+        
+        # ---- Stage 1.5: Rotation & Attenuation Initialization
+        if intermediate_initialization:
+            logger.info("Stage 1.5: Intermediate initialization")
+                        
+            # Stage 1.5a: Grid Search for Angular Velocities (ω)
+            soln_dict = self._stage_omega_initialization(soln_dict)
+
+            # Stage 1.5b: NNLS for Amplitudes (α)
+            soln_dict = self._stage_alpha_initialization(soln_dict)
+            self.theta_pre_stage2 = self._clone_dict(soln_dict)
+
+        logger.info("Stage 2: Running Stage 2 Multi-Start")
+        soln_dict = self._stage_multistart_joint(soln_dict)
+        
+        return soln_dict
+    
+    def fit_static_least_squares(
+        self,
+        proj_data: list[torch.Tensor],
+        t: torch.Tensor,
+    ) -> dict[str, list[torch.Tensor]]:
+        """
+        Direct Frame-by-Frame Projections Least-Squares Baseline.
+        
+        Fits GMM parameters directly against projection time-series without any
+        task modularization.
+        """
+        logger.info("Running Direct Frame-by-Frame Least Squares Baseline...")
+        
+        proj_data = self.process_projections(self._to_device(proj_data))
+        self.theta_dict_init = self.initialize_parameters()        
+        self.theta_fixed = {
+            'x0s': [x0.clone().detach() for x0 in self.x0s],
+            'a0s': [a0.clone().detach() for a0 in self.a0s],
+        }
+        
+        logger.info("Running %d full projection fit trials", self.n_traj_trials)
+        errors, results, init_values = [], [], []
+        for _ in range(self.n_traj_trials):
+            
+            # Initialize the velocities specific to the trial
+            self.theta_dict_init["v0s"] = self.initialize_initial_velocities()
+            init_values.append(self.theta_dict_init["v0s"])
+        
+            # Flatten parameters into optimization vector
+            x0_init = self.map_from_dict_to_tensor(self.theta_dict_init, mode="joint_with_v0")
+            x0_init = x0_init.detach().clone().requires_grad_(True)
+            
+            # Define standard unguied L2 loss closure over all projection frames
+            def loss_closure(x_flat):
+                theta_dict = self.map_from_tensor_to_dict(x_flat, mode='joint_with_v0')
+                proj_pred = self.process_projections(
+                    self.generate_projections(
+                        theta_dict=theta_dict, 
+                        t=t, 
+                        loss_type="joint_with_v0",
+                        )
+                    )
+                return F.huber_loss(proj_pred, proj_data, delta=0.3)
+            
+            # Optimize via standard L-BFGS
+            res_trial = minimize(
+                loss_closure,
+                x0=x0_init,
+                method='l-bfgs',
+                tol=1e-8,
+                options={'gtol': 1e-8, 'max_iter': 1500, 'disp': False},
+            )
+            errors.append(float(res_trial.fun.detach().cpu().item()))
+            results.append(res_trial)
+            
+        best_idx = np.argmin(np.array(errors))
+        best_init = init_values[best_idx]
+        best_res = results[best_idx]
+        soln_dict = self.construct_soln_dict(best_res, mode='joint_with_v0')
+
+        # Store pre-stage initialization state for consistency
+        self.theta_pre_stage1_5 = self.theta_dict_init.copy()
+        self.theta_pre_stage1_5["v0s"] = best_init
+        
+        return soln_dict
+        
 
     # ==================================================================
     # Stage 1 – trajectory optimization
@@ -150,16 +257,16 @@ class GMM_reco:
     ) -> dict[str, list[torch.Tensor]]:
         """Multi-start L-BFGS to estimate initial velocities v0."""
         logger.info("Stage 1: Trajectory optimization")
-        
-        self.theta_fixed = {
-        'x0s': [x0.clone().detach() for x0 in self.x0s],
-        'a0s': [a0.clone().detach() for a0 in self.a0s],
-        }
-        logger.info("Running %d trajectory multi-start trials", self.n_traj_trials)
 
         self.peak_detection(proj_data=proj_data, t=t)
-        self.theta_dict_init = self.initialize_parameters()
         
+        self.theta_dict_init = self.initialize_parameters()                
+        self.theta_fixed = {
+            'x0s': [x0.clone().detach() for x0 in self.x0s],
+            'a0s': [a0.clone().detach() for a0 in self.a0s],
+        }
+        
+        logger.info("Running %d trajectory multi-start trials", self.n_traj_trials)
         errors, results, init_values = [], [], []
         for _ in range(self.n_traj_trials):
             
@@ -177,27 +284,24 @@ class GMM_reco:
                 tol=1e-8, 
                 options={'gtol': 1e-8, 'max_iter': 1500, 'disp': False},
             )
-            errors.append(res_trial.fun)
+            errors.append(float(res_trial.fun.detach().cpu().item()))
             results.append(res_trial)
 
         best_idx = np.argmin(np.array(errors))
-        self.best_init = init_values[best_idx]
+        best_init = init_values[best_idx]
         best_res = results[best_idx]
         soln_dict = self.construct_soln_dict(best_res)
-
-        if 'v0s' not in soln_dict:
-            raise RuntimeError(
-                f"Trajectory optimization failed — no v0s in result. "
-                f"Got keys: {list(soln_dict.keys())}"
-            )
+        
+        self.theta_pre_stage1_5 = self.theta_dict_init.copy()
+        self.theta_pre_stage1_5["v0s"] = best_init
 
         soln_dict["v0s"] = [v0_n.clone().detach() for v0_n in soln_dict["v0s"]]
         soln_dict = self.refine_initial_velocities_via_newton_raphson(soln_dict, best_res)
         soln_dict["alphas"] = [alpha.clone().detach() for alpha in self.theta_dict_init["alphas"]]
-        soln_dict["omegas"] = [omega.clone().detach() for omega in self.theta_dict_init["omegas"]]        
+        soln_dict["omegas"] = [omega.clone().detach() for omega in self.theta_dict_init["omegas"]]
         soln_dict["U_skews"] = self.initialize_anisotropic_U_skews()
-
-        return soln_dict        
+                
+        return soln_dict    
     
     # ==================================================================
     # Initialization Routines
@@ -214,19 +318,7 @@ class GMM_reco:
         }
 
     def initialize_initial_velocities(self) -> list[torch.Tensor]:
-        """
-        Initializes trainable velocity parameters uniformly sampled across
-        the physically plausible prior bounds [v_min, v_max].
-        """
         return generate_velocity_ensemble(N=self.N, device=self.device)
-        # v0s = []
-        # for _ in range(self.N):
-        #     v0 = torch.tensor([1.0, 1.0], dtype=torch.float64, device=self.device)
-        #     # v0 = v0 + 1.5 * torch.randn(2, dtype=torch.float64, device=self.device)
-        #     v0 = v0 + 3.0 * torch.abs(torch.randn(2, dtype=torch.float64, device=self.device))
-        #     v0.requires_grad_(True)
-        #     v0s.append(v0)        
-        # return v0s
         
     def initialize_isotropic_U_skews(self):
         return [torch.diag(torch.tensor([35.0, 35.0], dtype=torch.float64, device=self.device)) for _ in range(self.N)]        
@@ -335,17 +427,6 @@ class GMM_reco:
                 mu = params[:, 0]
                 A = params[:, 1]
                 sigma = params[:, 2]
-
-                # data.append(
-                #     {
-                #         "time_idx": int(n_p),
-                #         "time_val": time_val_scalar,
-                #         "mu": mu.detach().cpu(),
-                #         "A": A.detach().cpu(),
-                #         "sigma": sigma.detach().cpu(),
-                #     }
-                # )
-
                 detected_heights = []
 
                 # Unroll per-Gaussian components so peak records maintain 1-to-1 row structure
@@ -519,7 +600,7 @@ class GMM_reco:
             # Point-to-Nearest-Curve distance across all N trajectories
             min_dists, best_curve_indices = torch.min(dists, dim=1) # [H_t]
             
-            # Optional: Smooth L1 / Huber penalty to bound outlier influence
+            # Smooth L1 / Huber penalty to bound outlier influence
             robust_dists = torch.nn.functional.smooth_l1_loss(
                 min_dists, torch.zeros_like(min_dists), beta=0.05, reduction='none'
             )
@@ -697,7 +778,7 @@ class GMM_reco:
             ]
             
             with torch.no_grad():
-                proj_bg = self.process_projections(self.generate_projections(t, bg_dict))
+                proj_bg = self.process_projections(self.generate_projections(t=t, theta_dict=bg_dict))
                 proj_resid_n = proj_obs - proj_bg
                 
             omega_n = soln_dict["omegas"][n].clone()
@@ -723,7 +804,7 @@ class GMM_reco:
                     try:
                         self.N = 1
                         with torch.no_grad():
-                            proj_n = self.process_projections(self.generate_projections(t, test_dict))
+                            proj_n = self.process_projections(self.generate_projections(t=t, theta_dict=test_dict))
                     finally:
                         self.N = orig_N
                     
@@ -769,7 +850,7 @@ class GMM_reco:
                     "v0s": [soln_dict["v0s"][n]],
                     "a0s": [soln_dict["a0s"][n]],
                 }
-                proj_n = self.generate_projections(t_obs, single_dict)
+                proj_n = self.generate_projections(t=t_obs, theta_dict=single_dict)
                 Phi[:, n] = self.process_projections(proj_n).reshape(-1)
             self.N = orig_N
             
@@ -845,7 +926,7 @@ class GMM_reco:
                 x0=theta_tensor,
                 method='l-bfgs',
                 tol=1e-10,
-                options={'gtol': 1e-10, 'max_iter': 1000, 'disp': False},
+                options={'gtol': 1e-8, 'max_iter': 1500, 'disp': False},
             )
 
             result_dict = self.construct_soln_dict(res, mode='joint')
@@ -867,7 +948,10 @@ class GMM_reco:
 
         return soln_dict
 
-    def _loss_joint(self, theta_tensor: torch.Tensor) -> torch.Tensor:
+    def _loss_joint(
+        self, 
+        theta_tensor: torch.Tensor,
+    ) -> torch.Tensor:
         
         has_v0_fixed = hasattr(self, 'theta_fixed') and 'v0s' in self.theta_fixed
         mode = 'joint' if has_v0_fixed else 'joint_with_v0'
@@ -877,8 +961,9 @@ class GMM_reco:
             if key not in theta_dict:
                 theta_dict[key] = value
 
-        sim_projs = self.generate_projections(self.t_observable, theta_dict)
+        sim_projs = self.generate_projections(t=self.t_observable, theta_dict=theta_dict)
         sim_projs_processed = self.process_projections(sim_projs)
+        
         proj_data_observable = self.proj_data[self.peak_data.observable_indices]
 
         return F.huber_loss(sim_projs_processed, proj_data_observable, delta=0.3)
@@ -886,47 +971,6 @@ class GMM_reco:
     # ==================================================================
     # Forward model
     # ==================================================================
-    
-    def evaluate_density(
-        self,
-        t: torch.Tensor,
-        positions: torch.Tensor,
-        theta_dict: dict[str, list[torch.Tensor]],
-    ) -> torch.Tensor:
-        """Evaluate the object-space GMM density ρ(x,t) = Σₙ αₙ exp(−½‖Uₙ(t)(x − μₙ(t))‖²).
-
-        Parameters
-        ----------
-        t : torch.Tensor, shape [T]
-            Time points at which to evaluate the density.
-        positions : torch.Tensor, shape [P, d]
-            Flat spatial evaluation points (shared across all times).
-        theta_dict : dict
-            Parameter dictionary with keys 'x0s', 'v0s', 'a0s', 'omegas', 'alphas', 'U_skews'.
-
-        Returns
-        -------
-        torch.Tensor, shape [T, P]
-            Density evaluated at every (time, position) pair.
-        """
-        rot_mats = self._compute_2d_rotation_matrices(t, theta_dict)   # [N, T, d, d]
-        trajs = self._compute_trajectories(t, theta_dict)              # [N, T, d]
-
-        T = len(t) if t.dim() > 0 else 1
-        density = torch.zeros(T, positions.shape[0], dtype=torch.float64, device=self.device)
-
-        for n in range(self.N):
-            alpha_n = theta_dict["alphas"][n].squeeze()
-            U_n = theta_dict["U_skews"][n]                                    # [d, d]
-            U_n_t = torch.matmul(U_n, rot_mats[n].transpose(-1, -2))          # [T, d, d]
-
-            deviations = positions.unsqueeze(0) - trajs[n].unsqueeze(1)       # [T, P, d]
-            U_dev = torch.matmul(deviations, U_n_t.transpose(-1, -2))         # [T, P, d]
-            quad_form = torch.sum(U_dev ** 2, dim=-1)                         # [T, P]
-
-            density = density + alpha_n * torch.exp(-0.5 * quad_form)
-
-        return density
     
     def generate_projections(
         self, 
@@ -1028,6 +1072,38 @@ class GMM_reco:
     ) -> torch.Tensor:
         """Flatten multi-source projection lists to a unified 2D tensor."""
         return projections[0] if self.n_sources == 1 else torch.cat(projections, dim=0)
+    
+    def evaluate_density(
+        self,
+        t: torch.Tensor,
+        positions: torch.Tensor,
+        theta_dict: dict[str, list[torch.Tensor]],
+    ) -> torch.Tensor:
+        """Evaluate the object-space GMM density ρ(x,t) = Σₙ αₙ exp(−½‖Uₙ(t)(x − μₙ(t))‖²).
+        
+        Returns
+        -------
+        torch.Tensor, shape [T, P]
+            Density evaluated at every (time, position) pair.
+        """
+        rot_mats = self._compute_2d_rotation_matrices(t, theta_dict)   # [N, T, d, d]
+        trajs = self._compute_trajectories(t, theta_dict)              # [N, T, d]
+
+        T = len(t) if t.dim() > 0 else 1
+        density = torch.zeros(T, positions.shape[0], dtype=torch.float64, device=self.device)
+
+        for n in range(self.N):
+            alpha_n = theta_dict["alphas"][n].squeeze()
+            U_n = theta_dict["U_skews"][n]                                    # [d, d]
+            U_n_t = torch.matmul(U_n, rot_mats[n].transpose(-1, -2))          # [T, d, d]
+
+            deviations = positions.unsqueeze(0) - trajs[n].unsqueeze(1)       # [T, P, d]
+            U_dev = torch.matmul(deviations, U_n_t.transpose(-1, -2))         # [T, P, d]
+            quad_form = torch.sum(U_dev ** 2, dim=-1)                         # [T, P]
+
+            density = density + alpha_n * torch.exp(-0.5 * quad_form)
+
+        return density
 
     # ==================================================================
     # Helper Functions
@@ -1166,6 +1242,79 @@ class GMM_reco:
                 theta_dict['v0s'] = v0s
 
         return theta_dict
+    
+    # ==================================================================
+    # Ablation & Baseline Studies
+    # ==================================================================
+    
+    def _stage_lstsq_trajectory_optimization(
+        self,
+        proj_data: list[torch.Tensor],
+        t: torch.Tensor,
+    ) -> dict[str, list[torch.Tensor]]:
+        """Attempting to recover trajectory solutions purely using least squares."""
+        self.t = t.to(self.device) if isinstance(t, torch.Tensor) else torch.tensor(t, device=self.device)
+        self.t_observable = self.t
+        self.proj_data = self.process_projections(self._to_device(proj_data))
+        self.peak_data = PeakData(self.N, self.device)
+        self.peak_data.observable_indices = range(len(self.proj_data))
+                
+        self.theta_dict_init = self.initialize_parameters()
+        self.theta_fixed = {
+            'x0s': [x0.clone().detach() for x0 in self.x0s],
+            'a0s': [a0.clone().detach() for a0 in self.a0s],
+            'U_skews': [U_skew.clone().detach() for U_skew in self.theta_dict_init["U_skews"]],
+            'omegas': [omega.clone().detach() for omega in self.theta_dict_init["omegas"]],
+            'alphas': [alpha.clone().detach() for alpha in self.theta_dict_init["alphas"]],
+        }        
+        
+        mse_loss = MSELoss()
+        def loss_closure(theta):
+            theta_dict = self.map_from_tensor_to_dict(theta, mode='trajectory')
+            y_pred = self.process_projections(
+                self.generate_projections(
+                    theta_dict=theta_dict, 
+                    t=t, 
+                    loss_type='trajectory',
+                    )
+                )
+            return mse_loss(y_pred, self.proj_data)
+        
+        logger.info("Running %d trajectory multi-start trials", self.n_traj_trials)
+        errors, results, init_values = [], [], []
+        for _ in range(self.n_traj_trials):
+            
+            # Initialize the velocities specific to the trial
+            self.theta_dict_init["v0s"] = self.initialize_initial_velocities()
+            init_values.append(self.theta_dict_init["v0s"])
+            for v0_n in self.theta_dict_init["v0s"]:
+                v0_n.requires_grad_(True)
+            
+            theta_tensor_init = self.map_from_dict_to_tensor(self.theta_dict_init, mode='trajectory')
+            res_trial = minimize(
+                loss_closure,
+                x0=theta_tensor_init,
+                method='l-bfgs',
+                tol=1e-8,
+                options={'gtol': 1e-8, 'max_iter': 1500, 'disp': False},
+            )
+            errors.append(float(res_trial.fun.detach().cpu().item()))
+            results.append(res_trial)
+        
+        best_idx = np.argmin(np.array(errors))
+        best_init = init_values[best_idx]
+        best_res = results[best_idx]
+        soln_dict = self.construct_soln_dict(best_res)
+        
+        self.theta_pre_stage1_5 = self.theta_dict_init.copy()
+        self.theta_pre_stage1_5["v0s"] = best_init
+        
+        soln_dict["v0s"] = [v0_n.clone().detach() for v0_n in soln_dict["v0s"]]
+        soln_dict["alphas"] = [alpha.clone().detach() for alpha in self.theta_dict_init["alphas"]]
+        soln_dict["omegas"] = [omega.clone().detach() for omega in self.theta_dict_init["omegas"]]        
+        soln_dict["U_skews"] = self.initialize_anisotropic_U_skews()
+        
+        return soln_dict
 
     # ==================================================================
     # Internal utilities
@@ -1225,6 +1374,17 @@ class GMM_reco:
             return {k: self._to_device(v) for k, v in obj.items()}
         return obj
     
+    
+    
+                # data.append(
+                #     {
+                #         "time_idx": int(n_p),
+                #         "time_val": time_val_scalar,
+                #         "mu": mu.detach().cpu(),
+                #         "A": A.detach().cpu(),
+                #         "sigma": sigma.detach().cpu(),
+                #     }
+                # )
     
     # --- 2. Diagnostic Spatial Profile Plots ---
     # data_df = pd.DataFrame(data)

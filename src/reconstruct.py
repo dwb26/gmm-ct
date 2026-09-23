@@ -57,8 +57,7 @@ def _load_projection_data(
 # ======================================================================
 
 def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
-    """Run the full reconstruction pipeline and optional analysis from config 
-    (though this to be decoupled)."""
+    """Run the full reconstruction pipeline."""
     start = wall_clock()
 
     # --- Reproducibility & Device ---
@@ -73,7 +72,26 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
     model = GMM_reco.from_config(cfg)
     
     # --- Run reconstruction ---
-    soln_dict = model.fit(proj_data, t)
+    pipeline_mode = getattr(cfg.reconstruction, "pipeline_mode", "full")
+    if pipeline_mode == "full":
+        logger.info("Executing Full Pipeline: Trajectory Recovery (Hausdorff/Peaks) -> Stage 1.5 -> Refinement")
+        soln_dict = model.fit(proj_data=proj_data, t=t)
+        
+    elif pipeline_mode == "static-lstsq":
+        logger.info("Executing Direct Frame-by-Frame Least Squares Baseline with no Staging/Pipelining")
+        soln_dict = model.fit_static_least_squares(proj_data=proj_data, t=t)
+        
+    # elif pipeline_mode == "naive-fit":
+        # logger.info("Executing Naive Baseline: Direct MSE Loss on Raw Projections (Also Bypassing Stage 1.5)")
+        # soln_dict = model.naive_fit(proj_data=proj_data, t=t, intermediate_initialization=False)
+        
+    elif pipeline_mode == "no-stage-1-5":
+        logger.info("Executing: Peak/Hausdorff Trajectory Recovery, but no Stage 1.5 Initialization Step")
+        soln_dict = model.fit(proj_data=proj_data, t=t, intermediate_initialization=False)
+        
+    elif pipeline_mode == "no-trajectory":
+        logger.info("Executing: Naive Least-Squares Trajectory Recovery, but with Stage 1.5 Initialization Step")
+        soln_dict = model.naive_fit(proj_data=proj_data, t=t)
 
     # --- Export Human-Readable Parameter Estimates ---
     export_parameters(
@@ -86,15 +104,16 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
     torch.save(
         {
             "params": {
-                "v0s": soln_dict['v0s'],             # Shape: [N, 2]
-                "x0s": soln_dict['x0s'],             # Shape: [N, 2]
-                "a0s": soln_dict['a0s'],             # Shape: [N, 2]
+                "v0s": soln_dict['v0s'],            # Shape: [N, 2]
+                "x0s": soln_dict['x0s'],            # Shape: [N, 2]
+                "a0s": soln_dict['a0s'],            # Shape: [N, 2]
                 "alphas": soln_dict['alphas'],      # Shape: [N]
                 "omegas": soln_dict['omegas'],      # Shape: [N]
                 "U_skews": soln_dict['U_skews'],    # Shape: [N, 2, 2]
             },
-            "theta_init": getattr(model, "theta_pre_stage1_5", None),
-            "theta_est": soln_dict,  # Full estimated parameter vector
+            "theta_pre_stage1_5": getattr(model, "theta_pre_stage1_5", None),
+            "theta_pre_stage2": model.theta_pre_stage2,
+            "theta_est": soln_dict,
             "runtime_seconds": wall_clock() - start,
             "config": {
                 "n_gaussians": cfg.reco_n_gaussians,

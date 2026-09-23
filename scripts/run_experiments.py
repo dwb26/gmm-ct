@@ -8,7 +8,7 @@ import numpy as np
 from src.config import ExperimentConfig, load_experiment_config
 from src.simulate import run_simulation
 from src.reconstruct import run_reconstruction
-from src.analysis import compute_run_metrics
+from src.analysis import run_analysis
 from src.visualization.plots import generate_benchmark_plots
 
 logging.basicConfig(level=logging.INFO)
@@ -19,10 +19,6 @@ SNR_LEVELS = [10.0, 15.0, 20.0, 40.0, 80.0]
 N_GAUSSIANS = [1, 2, 3, 5, 8, 12, 20]
 N_PROJECTIONS = [8, 16, 32, 64, 128, 256]
 SEEDS = range(1, 26)
-# SNR_LEVELS = [10.0, 15.0, 20.0]
-# N_GAUSSIANS = [1, 2, 3]
-# N_PROJECTIONS = [8, 16, 256]
-# SEEDS = range(1, 4)
 
 def generate_configs(base_config_path: Path) -> list[ExperimentConfig]:
     """Generates a list of ExperimentConfig objects by sweeping over parameters."""
@@ -97,7 +93,6 @@ def _append_to_parquet(records: list[dict], path: Path):
         new_df.to_parquet(path, index=False)
     logger.info(f"Checkpoint saved: flushed {len(new_df)} records to {path}")
 
-
 def run_experiment_pipeline(
     configs: list[ExperimentConfig],
     results_path: Path,
@@ -117,7 +112,7 @@ def run_experiment_pipeline(
         try:
             exp_dir = run_simulation(cfg)
             run_reconstruction(cfg)
-            metrics_dict = compute_run_metrics(exp_dir)
+            metrics_dict = run_analysis(exp_dir)
             metrics_dict['status'] = 'success'
 
             # Clean up intermediate tensor directory to prevent disk bloat

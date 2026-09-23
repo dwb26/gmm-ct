@@ -1,14 +1,14 @@
 device: null
-seed: 2
+seed: 42
 add_sino_noise: true
-# snr_db: 20000
-snr_db: 15
+snr_db: 80
+# snr_db: 15
 # snr_db: 20
 # snr_db: 10
 
 model: 
-  sim_n_gaussians: 1
-  reco_n_gaussians: 1
+  sim_n_gaussians: 5
+  reco_n_gaussians: 5
 
 geometry:
   sources:
@@ -25,7 +25,7 @@ physics:
   initial_accelerations:
     - [0.0, -9.81]
   omega_range: [2.0, 4.0]
-  n_projections: 16
+  n_projections: 128
   duration: 2.0
 
 reconstruction:
@@ -33,7 +33,11 @@ reconstruction:
   tolerance: 1e-5
 
 output:
-  directory: "data/"
+  # directory: "data/ablation_and_baseline/full-pipeline/"
+  directory: "data/ablation_and_baseline/static-lstsq/"
+  # directory: "data/ablation_and_baseline/naive-fit/"
+  # directory: "data/ablation_and_baseline/no-stage-1-5/"
+  # directory: "data/ablation_and_baseline/no-trajectory/"
   save_plots: true
   save_animations: true
   verbose: true

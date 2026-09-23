@@ -80,59 +80,91 @@ def match_estimated_to_true_gaussians(theta_true, theta_est, K):
             dist_v0 = np.linalg.norm(v0_est - v0_true)
 
             # Angular velocity — secondary
-            omega_est = theta_est['omegas'][k_est].detach().cpu().numpy()
-            omega_true = theta_true['omegas'][k_true].detach().cpu().numpy()
-            dist_omega = np.linalg.norm(omega_est - omega_true)
+            # omega_est = theta_est['omegas'][k_est].detach().cpu().numpy()
+            # omega_true = theta_true['omegas'][k_true].detach().cpu().numpy()
+            # dist_omega = np.linalg.norm(omega_est - omega_true)
 
             # Position — often shared, included for generality
-            x0_est = theta_est['x0s'][k_est].detach().cpu().numpy()
-            x0_true = theta_true['x0s'][k_true].detach().cpu().numpy()
-            dist_x0 = np.linalg.norm(x0_est - x0_true)
+            # x0_est = theta_est['x0s'][k_est].detach().cpu().numpy()
+            # x0_true = theta_true['x0s'][k_true].detach().cpu().numpy()
+            # dist_x0 = np.linalg.norm(x0_est - x0_true)
 
             cost_matrix[k_est, k_true] = (
-                10.0 * dist_v0
-                + 3.0 * dist_omega
-                + 1.0 * dist_x0
+                1.0 * dist_v0
+                # + 3.0 * dist_omega
+                # + 1.0 * dist_x0
             )
+            
+    # Sanitize NaN/Inf entries resulting from failed/divergent baselines
+    non_finite_mask = ~np.isfinite(cost_matrix)
+    if np.all(non_finite_mask):
+        # Fallback to 1-to-1 matching if cost matrix completely exploded
+        return list(range(K))
+    
+    if np.any(non_finite_mask):
+        # Assign a heavy penalty to invalid pairs
+        cost_matrix[non_finite_mask] = 1e9
 
     _, col_ind = linear_sum_assignment(cost_matrix)
     matching_indices = col_ind.tolist()
     return matching_indices
 
 
+# def reorder_theta_to_match_true(theta_true, theta_est, K):
+#     """
+#     Reorder estimated Gaussian parameters to match true Gaussians.
+    
+#     This function should be called once after optimization to ensure all
+#     subsequent plotting functions display correctly matched Gaussians.
+    
+#     Parameters:
+#     - theta_true: True GMM parameters
+#     - theta_est: Estimated GMM parameters
+#     - K: Number of Gaussians
+    
+#     Returns:
+#     - theta_est_reordered: Reordered estimated parameters
+#     - matching_indices: The matching indices used (for reference)
+#     """
+#     matching_indices = match_estimated_to_true_gaussians(theta_true, theta_est, K)
+    
+#     # matching_indices[k_est] = k_true means Est[k_est] matches True[k_true]
+#     # We want to create new_est where new_est[k_true] = Est[k_est]
+#     # So we need to invert the mapping
+#     inverse_matching = [0] * K
+#     for k_est, k_true in enumerate(matching_indices):
+#         inverse_matching[k_true] = k_est
+    
+#     theta_est_reordered = {
+#         'x0s': [theta_est['x0s'][inverse_matching[k]] for k in range(K)],
+#         'v0s': [theta_est['v0s'][inverse_matching[k]] for k in range(K)],
+#         'a0s': [theta_est['a0s'][inverse_matching[k]] for k in range(K)],
+#         'omegas': [theta_est['omegas'][inverse_matching[k]] for k in range(K)],
+#         'alphas': [theta_est['alphas'][inverse_matching[k]] for k in range(K)],
+#         'U_skews': [theta_est['U_skews'][inverse_matching[k]] for k in range(K)]
+#     }
+    
+#     return theta_est_reordered, matching_indices
+
 def reorder_theta_to_match_true(theta_true, theta_est, K):
     """
     Reorder estimated Gaussian parameters to match true Gaussians.
-    
-    This function should be called once after optimization to ensure all
-    subsequent plotting functions display correctly matched Gaussians.
-    
-    Parameters:
-    - theta_true: True GMM parameters
-    - theta_est: Estimated GMM parameters
-    - K: Number of Gaussians
-    
-    Returns:
-    - theta_est_reordered: Reordered estimated parameters
-    - matching_indices: The matching indices used (for reference)
     """
     matching_indices = match_estimated_to_true_gaussians(theta_true, theta_est, K)
     
-    # matching_indices[k_est] = k_true means Est[k_est] matches True[k_true]
-    # We want to create new_est where new_est[k_true] = Est[k_est]
-    # So we need to invert the mapping
+    # Safely invert matching
     inverse_matching = [0] * K
     for k_est, k_true in enumerate(matching_indices):
-        inverse_matching[k_true] = k_est
+        if k_true < K:
+            inverse_matching[k_true] = k_est
     
-    theta_est_reordered = {
-        'x0s': [theta_est['x0s'][inverse_matching[k]] for k in range(K)],
-        'v0s': [theta_est['v0s'][inverse_matching[k]] for k in range(K)],
-        'a0s': [theta_est['a0s'][inverse_matching[k]] for k in range(K)],
-        'omegas': [theta_est['omegas'][inverse_matching[k]] for k in range(K)],
-        'alphas': [theta_est['alphas'][inverse_matching[k]] for k in range(K)],
-        'U_skews': [theta_est['U_skews'][inverse_matching[k]] for k in range(K)]
-    }
+    # Reorder parameters that exist in theta_est
+    theta_est_reordered = {}
+    for key in ['x0s', 'v0s', 'a0s', 'omegas', 'alphas', 'U_skews']:
+        if key in theta_est:
+            theta_est_reordered[key] = [
+                theta_est[key][inverse_matching[k]] for k in range(K)
+            ]
     
     return theta_est_reordered, matching_indices
 
@@ -882,7 +914,8 @@ def plot_temporal_gmm_comparison(
             ax_right.set_xticks(xticks)
             ax_right.set_xticklabels([f"{int(-x)}" for x in xticks])
 
-    fig.tight_layout(pad=0.4)
+    # fig.tight_layout(pad=0.4)
+    # fig.tight_layout()
 
     if filename:
         save_figure(fig, filename)
@@ -2076,83 +2109,6 @@ def plot_trajectory_comparison(theta_true, theta_est, t, K, sources, receivers, 
         save_figure(fig, filename)
     
     return fig, ax
-
-
-# ======================================================================
-# --------------------------------------- COMBINED PUBLICATION FIGURE ------------------------------------------------------
-# ======================================================================
-
-def create_publication_figure(theta_true, theta_est, proj_data, proj_est, t, K, 
-                              sources, receivers, d, output_dir, prefix=""):
-    """
-    Create all publication-quality figures at once.
-    
-    Parameters:
-    - theta_true: True parameter dictionary
-    - theta_est: Estimated parameter dictionary
-    - proj_data: True projection data
-    - proj_est: Estimated projection data
-    - t: Time vector
-    - K: Number of Gaussians
-    - sources: Source positions
-    - receivers: Receiver positions
-    - d: Dimensionality
-    - output_dir: Output directory for saving figures
-    - prefix: Optional prefix for filenames
-    
-    Returns:
-    - Dictionary of figure objects
-    """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    figures = {}
-    
-    
-    # Figure 1: Acquisition geometry
-    fig1 = plot_figure1_experimental_setup(
-        sources, receivers, theta_true, t, K, d,
-        filename=output_dir / f"{prefix}fig1_experimental_setup.pdf",
-        time_snapshots=[0.62, 0.8]  # Two time points to show evolution
-    )
-    figures['geometry'] = fig1
-    
-    # Figure 2: Parameter recovery
-    fig2 = plot_parameter_recovery(
-        theta_true, theta_est, K,
-        filename=output_dir / f"{prefix}fig2_parameter_recovery.pdf",
-        title="Parameter Recovery Comparison"
-    )
-    figures['parameters'] = fig2
-    
-    # Figure 3: Error analysis
-    fig3 = plot_error_analysis(
-        theta_true, theta_est, K,
-        filename=output_dir / f"{prefix}fig3_error_analysis.pdf",
-        title="Parameter Recovery Errors"
-    )
-    figures['errors'] = fig3
-    
-    # Figure 4: Sinogram comparison
-    fig4 = plot_sinogram_comparison(
-        proj_data, proj_est, t, receivers,
-        filename=output_dir / f"{prefix}fig4_sinogram_comparison.pdf",
-        title="Projection Data Comparison"
-    )
-    figures['sinogram'] = fig4
-    
-    # Figure 5: Trajectory comparison
-    fig5, _ = plot_trajectory_comparison(
-        theta_true, theta_est, t, K, sources, receivers, d,
-        filename=output_dir / f"{prefix}fig5_trajectory_comparison.pdf",
-        title="Trajectory Reconstruction"
-    )
-    figures['trajectories'] = fig5
-    
-    
-    # Figure 6
-    
-    return figures
 
 
 # ===========================================================================

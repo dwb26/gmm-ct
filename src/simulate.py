@@ -49,10 +49,10 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
 
     # --- Simulate the ground truth parameters ---
     theta_true = generate_true_param(
-        d=d, N=N, 
-        initial_location=x0s[0], 
-        initial_acceleration=a0s[0], 
-        min_rot=omega_min, 
+        d=d, N=N,
+        initial_location=x0s[0],
+        initial_acceleration=a0s[0],
+        min_rot=omega_min,
         max_rot=omega_max, 
         device=device,
     )
