@@ -35,6 +35,11 @@ def generate_benchmark_plots(parquet_path: Path, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     df = pd.read_parquet(parquet_path)
     logger.info(f"Loaded {len(df)} experiment runs from {parquet_path.name} for plotting.")
+    
+    # Convert N to categorical string so Seaborn treats each value as a discrete line & legend item
+    n_order = sorted(df["N"].unique())
+    df["N_cat"] = df["N"].astype(str)
+    hue_order = [str(n) for n in n_order]
 
     # ------------------------------------------------------------------
     # Figure 1: Relative L2 Density Error vs. Projections (by N Gaussians)
@@ -48,7 +53,9 @@ def generate_benchmark_plots(parquet_path: Path, output_dir: Path) -> None:
         data=snr_subset,
         x="n_proj",
         y="rel_l2_density_error",
-        hue="N",
+        hue="N_cat",
+        hue_order=hue_order,
+        palette="viridis",
         estimator=np.mean,
         errorbar=None,  # 25th-75th percentile shade (IQR)
         marker="o",
@@ -60,7 +67,9 @@ def generate_benchmark_plots(parquet_path: Path, output_dir: Path) -> None:
         data=snr_subset,
         x="snr_db",
         y="rel_l2_density_error",
-        hue="N",
+        hue="N_cat",
+        hue_order=hue_order,
+        palette="viridis",
         estimator=np.mean,
         errorbar=None,  # 25th-75th percentile shade (IQR)
         marker="o",
@@ -93,10 +102,10 @@ def generate_benchmark_plots(parquet_path: Path, output_dir: Path) -> None:
     fig, axes = plt.subplots(2, 2, figsize=(10, 8), dpi=300, sharex=True)
 
     metrics = [
-        ("v0_median_err", r"Velocity Error $\|v_0^* - \hat{v}_0\|$"),
-        ("omega_median_err", r"Rotational Error $|\omega^* - \hat{\omega}|$"),
-        ("alpha_median_err", r"Amplitude Error $|\alpha^* - \hat{\alpha}|$"),
-        ("U_median_err", r"Skew Covariance Error $\|U^* - \hat{U}\|_F$"),
+        ("v0_rmse", r"Velocity Error $\|\mathbf{v}_0^* - \widehat{\mathbf{v}}_0\|_2$"),
+        ("omega_rmse", r"Rotational Error $|\Theta^* - \widehat{\Theta}|$"),
+        ("alpha_rmse", r"Amplitude Error $|\alpha^* - \widehat{\alpha}|$"),
+        ("U_rmse", r"Skew Covariance Error $\|\mathbf{U}^* - \widehat{\mathbf{U}}\|_F$"),
     ]
 
     for (col_name, title_str), ax in zip(metrics, axes.flat):
@@ -105,12 +114,14 @@ def generate_benchmark_plots(parquet_path: Path, output_dir: Path) -> None:
             x="N",
             y=col_name,
             hue="n_proj",
+            # palette="viridis",
             ax=ax,
             showfliers=False,  # Robust against extreme unobserved outliers
         )
         ax.set_yscale("log")
         ax.set_title(title_str)
         ax.set_xlabel("Number of Gaussians ($N$)")
+        ax.set_ylabel("RMSE")
         ax.grid(True, which="both", ls=":", alpha=0.4)
 
     plt.tight_layout()

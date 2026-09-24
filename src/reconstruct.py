@@ -75,15 +75,11 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
     pipeline_mode = getattr(cfg.reconstruction, "pipeline_mode", "full")
     if pipeline_mode == "full":
         logger.info("Executing Full Pipeline: Trajectory Recovery (Hausdorff/Peaks) -> Stage 1.5 -> Refinement")
-        soln_dict = model.fit(proj_data=proj_data, t=t)
+        soln_dict = model.fit(proj_data=proj_data, t=t, intermediate_initialization=False) #### SWITCHING TO NO 1.5!!!!
         
     elif pipeline_mode == "static-lstsq":
         logger.info("Executing Direct Frame-by-Frame Least Squares Baseline with no Staging/Pipelining")
         soln_dict = model.fit_static_least_squares(proj_data=proj_data, t=t)
-        
-    # elif pipeline_mode == "naive-fit":
-        # logger.info("Executing Naive Baseline: Direct MSE Loss on Raw Projections (Also Bypassing Stage 1.5)")
-        # soln_dict = model.naive_fit(proj_data=proj_data, t=t, intermediate_initialization=False)
         
     elif pipeline_mode == "no-stage-1-5":
         logger.info("Executing: Peak/Hausdorff Trajectory Recovery, but no Stage 1.5 Initialization Step")

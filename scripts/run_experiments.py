@@ -15,10 +15,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Define Experiment Matrix ---
-SNR_LEVELS = [10.0, 15.0, 20.0, 40.0, 80.0]
-N_GAUSSIANS = [1, 2, 3, 5, 8, 12, 20]
-N_PROJECTIONS = [8, 16, 32, 64, 128, 256]
-SEEDS = range(1, 26)
+# SNR_LEVELS = [10.0, 15.0, 20.0, 40.0, 80.0]
+# N_GAUSSIANS = [1, 2, 3, 5, 8, 12, 20]
+# N_PROJECTIONS = [8, 16, 32, 64, 128, 256]
+# SEEDS = range(1, 26)
+SNR_LEVELS = [10.0, 15.0, 20.0, 40.0]
+N_GAUSSIANS = [1, 2, 3, 5, 8, 10, 15]
+N_PROJECTIONS = [8, 16, 32, 64, 128]
+SEEDS = range(1, 21)
 
 def generate_configs(base_config_path: Path) -> list[ExperimentConfig]:
     """Generates a list of ExperimentConfig objects by sweeping over parameters."""
@@ -161,22 +165,22 @@ def main():
     figures_dir = Path("data/figures")
     
     # 1. Generate full parameter sweep matrix
-    all_configs = generate_configs(base_config_path)
+    # all_configs = generate_configs(base_config_path)
     
-    # 2. Filter out already completed runs for automatic resumption
-    configs_to_run = filter_completed_configs(all_configs, results_path)
+    # # 2. Filter out already completed runs for automatic resumption
+    # configs_to_run = filter_completed_configs(all_configs, results_path)
     
-    if not configs_to_run:
-        logger.info("All experiments in the sweep are completed!")
-        return
+    # if not configs_to_run:
+    #     logger.info("All experiments in the sweep are completed!")
+    #     return
 
-    # 3. Stream pipeline
-    run_experiment_pipeline(
-        configs=configs_to_run,
-        results_path=results_path,
-        keep_tensors=False,
-        batch_size=50,
-    )
+    # # 3. Stream pipeline
+    # run_experiment_pipeline(
+    #     configs=configs_to_run,
+    #     results_path=results_path,
+    #     keep_tensors=False,
+    #     batch_size=50,
+    # )
     
     # 4. Read Parquet results & generate plots
     generate_benchmark_plots(
