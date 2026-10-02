@@ -1,0 +1,10 @@
+regime: Regime C (Severely Unidentifiable)
+metrics:
+  I_min: 0.1817042860563678
+  I_mean: 41.65983216881875
+  overlap_fraction: 0.022727273404598236
+parameters:
+  N: 12
+  n_projections: 8
+  snr_db: 40.0
+  seed: 23

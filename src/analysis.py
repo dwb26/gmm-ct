@@ -95,6 +95,7 @@ def compute_integrated_l2_density(
     rel_l2_error = abs_l2_error / (gt_energy + 1e-12)
     
     return abs_l2_error, rel_l2_error
+
 # compute_run_metrics
 def run_analysis(exp_dir: Path) -> dict:
     """Evaluates parameter and spatio-temporal density metrics for a single experiment directory."""

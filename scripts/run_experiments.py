@@ -97,62 +97,63 @@ def _append_to_parquet(records: list[dict], path: Path):
         new_df.to_parquet(path, index=False)
     logger.info(f"Checkpoint saved: flushed {len(new_df)} records to {path}")
 
+
 def run_experiment_pipeline(
     configs: list[ExperimentConfig],
     results_path: Path,
     keep_tensors: bool = False,
-    batch_size: int = 50,
+    batch_size: int = 5,  # Reduced from 50 to prevent data loss
 ):
-    """Executes sim, reco, metric logging, and folder cleanup in a unified stream."""
     records = []
     total = len(configs)
 
-    for idx, cfg in enumerate(configs, start=1):
-        logger.info(
-            f"[{idx}/{total}] Processing SNR={cfg.snr_db}, N={cfg.sim_n_gaussians}, "
-            f"n_proj={cfg.physics.n_projections}, seed={cfg.seed}"
-        )
+    try:
+        for idx, cfg in enumerate(configs, start=1):
+            logger.info(
+                f"[{idx}/{total}] Processing SNR={cfg.snr_db}, N={cfg.sim_n_gaussians}, "
+                f"n_proj={cfg.physics.n_projections}, seed={cfg.seed}"
+            )
 
-        try:
-            exp_dir = run_simulation(cfg)
-            run_reconstruction(cfg)
-            metrics_dict = run_analysis(exp_dir)
-            metrics_dict['status'] = 'success'
+            try:
+                exp_dir = run_simulation(cfg)
+                run_reconstruction(cfg)
+                metrics_dict = run_analysis(exp_dir)
+                metrics_dict['status'] = 'success'
 
-            # Clean up intermediate tensor directory to prevent disk bloat
-            if not keep_tensors:
-                shutil.rmtree(exp_dir, ignore_errors=True)
+                if not keep_tensors:
+                    shutil.rmtree(exp_dir, ignore_errors=True)
 
-        except Exception as e:
-            logger.error(f"Failed pipeline run for {cfg.exp_dir.name}: {e}")
-            metrics_dict = {
-                'exp_dir': str(cfg.exp_dir),
-                'N': cfg.sim_n_gaussians,
-                'n_proj': cfg.physics.n_projections,
-                'snr_db': float(cfg.snr_db),
-                'seed': cfg.seed,
-                'status': 'failed',
-                # Fill numerical errors with NaN so they don't corrupt metric calculations
-                'v0_rmse': np.nan,
-                'omega_rmse': np.nan,
-                'alpha_rmse': np.nan,
-                'U_rmse': np.nan,
-                'l2_density_error': np.nan,
-                'rel_l2_density_error': np.nan,
-                'log_l2_density_error': np.nan,
-                'log_rel_l2_density_error': np.nan,
-            }
-            
-        records.append(metrics_dict)
+            except Exception as e:
+                logger.error(f"Failed pipeline run for {cfg.exp_dir.name}: {e}")
+                metrics_dict = {
+                    'exp_dir': str(cfg.exp_dir),
+                    'N': int(cfg.sim_n_gaussians),
+                    'n_proj': int(cfg.physics.n_projections),
+                    'snr_db': float(cfg.snr_db),
+                    'seed': int(cfg.seed),
+                    'status': 'failed',
+                    'v0_rmse': np.nan,
+                    'omega_rmse': np.nan,
+                    'alpha_rmse': np.nan,
+                    'U_rmse': np.nan,
+                    'l2_density_error': np.nan,
+                    'rel_l2_density_error': np.nan,
+                    'log_l2_density_error': np.nan,
+                    'log_rel_l2_density_error': np.nan,
+                }
+                
+            records.append(metrics_dict)
 
-        # Batch checkpoint to Parquet
-        if len(records) >= batch_size:
+            # Checkpoint every 5 records
+            if len(records) >= batch_size:
+                _append_to_parquet(records, results_path)
+                records = []
+
+    finally:
+        # ALWAYS flush remaining in-memory records on exit/interrupt
+        if records:
             _append_to_parquet(records, results_path)
-            records = []
-
-    # Flush any remaining records at the end
-    if records:
-        _append_to_parquet(records, results_path)
+            logger.info("Flushed remaining records during shutdown/cleanup.")
 
 
 # ======================================================================
@@ -165,22 +166,22 @@ def main():
     figures_dir = Path("data/figures")
     
     # 1. Generate full parameter sweep matrix
-    # all_configs = generate_configs(base_config_path)
+    all_configs = generate_configs(base_config_path)
     
-    # # 2. Filter out already completed runs for automatic resumption
-    # configs_to_run = filter_completed_configs(all_configs, results_path)
+    # 2. Filter out already completed runs for automatic resumption
+    configs_to_run = filter_completed_configs(all_configs, results_path)
     
-    # if not configs_to_run:
-    #     logger.info("All experiments in the sweep are completed!")
-    #     return
+    if not configs_to_run:
+        logger.info("All experiments in the sweep are completed!")
+        return
 
-    # # 3. Stream pipeline
-    # run_experiment_pipeline(
-    #     configs=configs_to_run,
-    #     results_path=results_path,
-    #     keep_tensors=False,
-    #     batch_size=50,
-    # )
+    # 3. Stream pipeline
+    run_experiment_pipeline(
+        configs=configs_to_run,
+        results_path=results_path,
+        keep_tensors=False,
+        batch_size=50,
+    )
     
     # 4. Read Parquet results & generate plots
     generate_benchmark_plots(

@@ -1,0 +1,10 @@
+regime: Regime A (Fully Identifiable)
+metrics:
+  I_min: 4.4421879299886236
+  I_mean: 27.10590372654948
+  overlap_fraction: 0.0
+parameters:
+  N: 5
+  n_projections: 128
+  snr_db: 10.0
+  seed: 25

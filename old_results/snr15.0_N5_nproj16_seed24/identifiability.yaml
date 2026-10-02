@@ -1,0 +1,10 @@
+regime: Regime B (Partially Identifiable)
+metrics:
+  I_min: 1.361664048657234
+  I_mean: 49.98056902379622
+  overlap_fraction: 0.0
+parameters:
+  N: 5
+  n_projections: 16
+  snr_db: 15.0
+  seed: 24

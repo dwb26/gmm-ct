@@ -74,7 +74,7 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
     # --- Run reconstruction ---
     pipeline_mode = getattr(cfg.reconstruction, "pipeline_mode", "full")
     if pipeline_mode == "full":
-        logger.info("Executing Full Pipeline: Trajectory Recovery (Hausdorff/Peaks) -> Stage 1.5 -> Refinement")
+        logger.info("Executing GMM-CT: Trajectory Recovery (Hausdorff/Peaks) -> Multi-Start Least Squares")
         soln_dict = model.fit(proj_data=proj_data, t=t, intermediate_initialization=False) #### SWITCHING TO NO 1.5!!!!
         
     elif pipeline_mode == "static-lstsq":
@@ -110,6 +110,8 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
             "theta_pre_stage1_5": getattr(model, "theta_pre_stage1_5", None),
             "theta_pre_stage2": model.theta_pre_stage2,
             "theta_est": soln_dict,
+            # Modes detected in the projections: {time: [heights]} (times with no modes are absent)
+            "detected_modes": dict(model.peak_data.receiver_heights_by_time),
             "runtime_seconds": wall_clock() - start,
             "config": {
                 "n_gaussians": cfg.reco_n_gaussians,

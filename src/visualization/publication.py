@@ -14,7 +14,7 @@ import seaborn as sns
 import torch
 from matplotlib.animation import FuncAnimation
 from matplotlib.gridspec import GridSpec
-from matplotlib.patches import Ellipse, FancyBboxPatch
+from matplotlib.patches import Ellipse
 from scipy.optimize import linear_sum_assignment
 
 

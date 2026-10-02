@@ -704,7 +704,7 @@ def animate_simulation(
 
         return anim_3d
 
-    projs_np = projs.cpu().numpy()          # (T, n_rcvrs)
+    projs_np = projs.cpu().detach().numpy()          # (T, n_rcvrs)
     t_np = t.cpu().numpy()
     T = len(t_np)
 
@@ -1207,7 +1207,7 @@ def export_poster_gmm_figure(
     proj_data = torch.load(sim_dir / "projections.pt", weights_only=True)
     gt_data = torch.load(sim_dir / "ground_truth.pt", weights_only=True)
 
-    projs_np = proj_data["projections"].cpu().numpy()  # (T, n_rcvrs)
+    projs_np = proj_data["projections"].cpu().detach().numpy()  # (T, n_rcvrs)
     t_np = proj_data["times"].cpu().numpy()
     theta_true = gt_data["theta_true"]
     receivers = gt_data["receivers"]
