@@ -73,21 +73,17 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
     
     # --- Run reconstruction ---
     pipeline_mode = getattr(cfg.reconstruction, "pipeline_mode", "full")
-    if pipeline_mode == "full":
+    if pipeline_mode == "gmm-ct":
         logger.info("Executing GMM-CT: Trajectory Recovery (Hausdorff/Peaks) -> Multi-Start Least Squares")
-        soln_dict = model.fit(proj_data=proj_data, t=t, intermediate_initialization=False) #### SWITCHING TO NO 1.5!!!!
+        soln_dict = model.fit(proj_data=proj_data, t=t)
         
-    elif pipeline_mode == "static-lstsq":
+    elif pipeline_mode == "direct-ls":
         logger.info("Executing Direct Frame-by-Frame Least Squares Baseline with no Staging/Pipelining")
         soln_dict = model.fit_static_least_squares(proj_data=proj_data, t=t)
         
-    elif pipeline_mode == "no-stage-1-5":
-        logger.info("Executing: Peak/Hausdorff Trajectory Recovery, but no Stage 1.5 Initialization Step")
-        soln_dict = model.fit(proj_data=proj_data, t=t, intermediate_initialization=False)
-        
-    elif pipeline_mode == "no-trajectory":
-        logger.info("Executing: Naive Least-Squares Trajectory Recovery, but with Stage 1.5 Initialization Step")
-        soln_dict = model.naive_fit(proj_data=proj_data, t=t)
+    elif pipeline_mode == "decoupled-ls":
+        logger.info("Executing: Least-Squares, but with Decoupling")
+        soln_dict = model.naive_fit(proj_data=proj_data, t=t, intermediate_initialization=False)
 
     # --- Export Human-Readable Parameter Estimates ---
     export_parameters(

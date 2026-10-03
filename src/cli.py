@@ -58,9 +58,9 @@ def _add_common_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--pipeline-mode",
         type=str,
-        default="full",
-        choices=["full", "static-lstsq", "naive-fit", "no-stage-1-5", "no-trajectory"],
-        help="Pipeline execution mode for ablation studies (naive-fit is basic lstsq on traj and no 1.5)",
+        default="gmm-ct",
+        choices=["gmm-ct", "direct-ls", "decoupled-ls"],
+        help="Pipeline execution mode for ablation studies",
     )
     parser.add_argument(
         "--seed", 
@@ -227,7 +227,7 @@ def _apply_cli_overrides(cfg, args) -> None:
         cfg.reconstruction.pipeline_mode = args.pipeline_mode
 
     # Temporary guardrail: Limit threads if running the naive baseline parallel to the main sweep
-    if getattr(args, "pipeline_mode", None) in ["full", "naive-fit", "no-stage-1-5", "no-trajectory"]:
+    if getattr(args, "pipeline_mode", None) in ["gmm-ct", "direct-ls", "decoupled-ls"]:
         logger.info("Configuring single-shot naive baseline run (thread limit = 2)...")
         os.environ["OMP_NUM_THREADS"] = "2"
         os.environ["MKL_NUM_THREADS"] = "2"

@@ -124,7 +124,6 @@ class GMM_reco:
         self, 
         proj_data: list[torch.Tensor], 
         t: torch.Tensor,
-        intermediate_initialization: bool = True,
     ) -> dict[str, list[torch.Tensor]]:
         """Execute full 4-stage optimization pipeline."""
         self.t = t.to(self.device) if isinstance(t, torch.Tensor) else torch.tensor(t, device=self.device)
@@ -132,14 +131,6 @@ class GMM_reco:
 
         # Stage 1: Trajectory Optimization
         soln_dict = self._stage_trajectory_optimization(t=t, proj_data=proj_data)
-
-        if intermediate_initialization:
-            # Stage 1.5a: Grid Search for Angular Velocities (ω)
-            soln_dict = self._stage_omega_initialization(soln_dict)
-            
-            # Stage 1.5b: NNLS for Amplitudes (α)
-            soln_dict = self._stage_alpha_initialization(soln_dict)
-            self.theta_pre_stage2 = self._clone_dict(soln_dict)
 
         # Stage 2: Multi-start Joint Refinement
         soln_dict = self._stage_multistart_joint(soln_dict)
@@ -887,8 +878,8 @@ class GMM_reco:
 
         initial_alphas = [a.clone().detach() for a in soln_dict['alphas']]
         initial_U_skews = [U.clone().detach() for U in soln_dict['U_skews']]
-        omega_min = self.omega_min - 0.01
-        omega_max = self.omega_max + 0.01
+        omega_min = self.omega_min
+        omega_max = self.omega_max
 
         # Explicitly lock stage fixed variables (pure state management)
         self.theta_fixed = {

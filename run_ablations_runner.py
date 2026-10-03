@@ -23,10 +23,9 @@ SEEDS: List[int] = list(range(10))
 
 # Map pipeline CLI arguments to their isolated target subdirectories
 PIPELINE_MODES: Dict[str, str] = {
-    "full": "data/ablation_and_baseline/full-pipeline",
-    "static-lstsq": "data/ablation_and_baseline/static-lstsq",
-    "no-stage-1-5": "data/ablation_and_baseline/no-stage-1-5",
-    "no-trajectory": "data/ablation_and_baseline/no-trajectory",
+    "gmm-ct": "data/ablation_and_baseline/gmm-ct",
+    "direct-ls": "data/ablation_and_baseline/direct-ls",
+    "decoupled-ls": "data/ablation_and_baseline/decoupled-ls",
 }
 
 BASE_CONFIG = "configs/experiment.yaml"

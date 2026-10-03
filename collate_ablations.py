@@ -18,10 +18,9 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path("data/ablation_and_baseline")
 
 VARIANTS: Dict[str, str] = {
-    "Direct Huber LS": "static-lstsq",
-    "No Stage 1.5": "no-stage-1-5",
-    "No Trajectory Matching": "no-trajectory",
-    "Full GMM-CT (Ours)": "full-pipeline",
+    "Direct LS": "direct-ls",
+    "Decoupled LS": "decoupled-ls",
+    "Full GMM-CT (Ours)": "gmm-ct",
 }
 
 N_PARTICLES: List[int] = [1, 2, 5, 8]

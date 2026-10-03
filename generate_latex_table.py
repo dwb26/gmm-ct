@@ -7,10 +7,9 @@ LATEX_OUTPUT_PATH = Path("data/ablation_and_baseline/ablation_table.tex")
 
 # Map CSV column headers to formatted LaTeX column titles
 COLUMN_MAPPINGS = {
-    "Direct Huber LS": r"\makecell{Direct Huber LS \\ \small(Baseline)}",
-    "No Stage 1.5": r"\makecell{Trajectory Opt. \\ \small(No Stage 1.5)}",
-    "No Trajectory Matching": r"\makecell{Stage 1.5 Only \\ \small(No Hausdorff)}",
-    "Full GMM-CT (Ours)": r"\makecell{GMM-CT}",
+    "Direct LS": r"\makecell{Direct LS \\ \small(No decoupling)}",
+    "Decoupled LS": r"\makecell{Decoupled LS}",
+    "GMM-CT": r"\makecell{GMM-CT}",
 }
 
 

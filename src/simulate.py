@@ -165,13 +165,13 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
     logger.info(f"Saved identifiability metrics to: {ident_file}")
 
     # --- Visualizations ---
-    if cfg.analysis.skip_animations:
-        pass
-    else:
-        logger.info(f"Generating the plots and animations...")
-        animate_simulation(
-            sim_dir=exp_dir,
-            output_path=exp_dir / 'simulation_2d.mp4',
-        )
+    # if cfg.analysis.skip_animations:
+    #     pass
+    # else:
+    #     logger.info(f"Generating the plots and animations...")
+    #     animate_simulation(
+    #         sim_dir=exp_dir,
+    #         output_path=exp_dir / 'simulation_2d.mp4',
+    #     )
 
     return exp_dir
