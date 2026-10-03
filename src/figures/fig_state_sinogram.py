@@ -1,7 +1,6 @@
 """Figure: particle states and their projections at two times, plus the full sinogram."""
 
 import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from .data import Run
@@ -39,13 +38,9 @@ def state_sinogram(run: Run, times=None) -> plt.Figure:
         ax_s.set_aspect("equal", adjustable="box")
         ax_s.set_xlabel("Depth", fontweight="bold")
         ax_s.set_ylabel("Detector height" if i == 0 else "", fontweight="bold")
-        if i:
-            ax_s.tick_params(labelleft=False)
+        ax_s.tick_params(labelleft=False)
         ax_s.set_facecolor(STATE_FACE)
         ax_s.set_title(f"State Snapshot (t = {run.t[idx]:.2f} s)", fontweight="bold")
-        # if i == 0:
-            # ax_s.legend(handles=[Patch(facecolor=gauss_cols[k], edgecolor="black", label=rf"$\rho_{{{k + 1}}}$")
-                                #  for k in range(run.N)], loc="upper left", fontsize=8, framealpha=0.9)
 
         # Attached axes keep the projection the same height as the state panel
         ax_p = make_axes_locatable(ax_s).append_axes("right", size="35%", pad=0.08, sharey=ax_s)

@@ -35,16 +35,13 @@ def draw_geometry(ax, run: Run):
             markersize=2, alpha=0.5, zorder=50, label="Detectors")
 
 
-def draw_projection_profile(ax, run: Run, idx: int, color, modes=None):
-    """Projection at time index ``idx`` with intensity on x and detector height on y."""
-    row = run.proj[idx]
-    ax.plot(row, run.y, color=color, linewidth=1.5)
+def draw_projection_profile(ax, run: Run, idx: int, color, modes=None, marker="*"):
+    """Projection at time index ``idx`` (detector height on x) with its modes marked by ``marker``."""
+    ax.plot(run.y, run.proj[idx], color="black", linewidth=1.0)
     if modes is not None and len(modes):
-        vals = np.interp(modes, run.y, row)
-        ax.hlines(modes, 0, vals, color=color, linestyle=":", linewidth=1.0)
-        ax.plot(vals, modes, "o", markerfacecolor=color, markeredgecolor="black",
-                markeredgewidth=0.6, markersize=6, linestyle="none", zorder=4)
-    ax.set_xlim(left=0)
+        ax.plot(modes, 0.01 * np.ones(len(modes)), marker, markersize=6, linestyle="none",
+                zorder=4, markerfacecolor="None", markeredgecolor="black", label="Modes")
+        ax.legend(frameon=True)
 
 
 def draw_mode_data(ax, run: Run, modes_per_time):
@@ -61,7 +58,7 @@ def match_to_truth(run: Run, theta: dict) -> np.ndarray:
     return linear_sum_assignment(cost)[1]
 
 
-def draw_mode_trajectories(ax, run: Run, theta: dict, colors, linewidth=1.8, labels=None):
+def draw_mode_trajectories(ax, run: Run, theta: dict, colors, linewidth=1.0, labels=None, alpha=0):
     """One solid line per particle; ``colors[k]`` is the colour of the matched true particle."""
     heights = run.mode_heights(theta)
     # Hide the divergent pieces where the ray leaves the detector
@@ -69,4 +66,4 @@ def draw_mode_trajectories(ax, run: Run, theta: dict, colors, linewidth=1.8, lab
     perm = match_to_truth(run, theta)
     for k, j in enumerate(perm):
         ax.plot(run.t, heights[j], color=colors[k], linewidth=linewidth, zorder=3,
-                label=None if labels is None else labels[k])
+                label=None if labels is None else labels[k], alpha=alpha)

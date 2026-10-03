@@ -32,20 +32,28 @@ def modes(run: Run, times=None, crop_time: bool = True) -> plt.Figure:
 
     ax_mid = fig.add_subplot(gs[:, 1])
     ax_right = fig.add_subplot(gs[:, 2], sharex=ax_mid, sharey=ax_mid)
-    prev = None
+    y_max = 0.0
+    symbols = ["^", "d"]
     for row, (idx, col) in enumerate(zip(idxs, cols)):
-        ax = fig.add_subplot(gs[row, 0], sharey=ax_mid)
-        draw_projection_profile(ax, run, idx, col, modes_per_time[idx])
-        ax.set_title(f"Projection (t = {run.t[idx]:.2f} s)", color=col, fontweight="bold")
-        ax.set_ylabel("Detector height", fontweight="bold")
+        ax = fig.add_subplot(gs[row, 0])
+        y_max_c = max(run.proj[idx])
+        if y_max_c > y_max: 
+            y_max = y_max_c
+        draw_projection_profile(ax, run, idx, col, modes_per_time[idx], marker=symbols[row])
+        ax.set_title(f"Projection (t = {run.t[idx]:.2f})", fontweight="bold")
         if row == 0:
             ax.tick_params(labelbottom=False)
         else:
-            ax.set_xlabel("Projection intensity", fontweight="bold")
+            ax.set_xlabel("Detector height", fontweight="bold")
+        ax.set_ylabel("Projection intensity", fontweight="bold")
         for target in (ax_mid, ax_right):
-            target.axvline(run.t[idx], color=col, linewidth=1.0, zorder=1)
-            target.plot([run.t[idx]] * len(modes_per_time[idx]), modes_per_time[idx], "o",
-                        color=col, markeredgecolor="black", markeredgewidth=0.5, markersize=4.5, zorder=4)
+            target.plot([run.t[idx]] * len(modes_per_time[idx]), modes_per_time[idx], symbols[row],
+                        color="black", markersize=7, linestyle="none", zorder=4, markerfacecolor="None", 
+                        markeredgecolor="black")
+    for row, (idx, col) in enumerate(zip(idxs, cols)):
+        ax = fig.axes[row]
+        ax.set(ylim=(-.5, y_max))
+        ax.tick_params(labelsize=12)
 
     for ax in (ax_mid, ax_right):
         draw_mode_data(ax, run, modes_per_time)
@@ -60,14 +68,16 @@ def modes(run: Run, times=None, crop_time: bool = True) -> plt.Figure:
         ax_mid.set_xlim(run.t[0], run.t[-1])
 
     if run.theta_init is not None:
-        draw_mode_trajectories(ax_mid, run, run.theta_init, pcols)
+        draw_mode_trajectories(ax_mid, run, run.theta_init, pcols, alpha=0.6)
     else:
         logger.warning("No theta_pre_stage1_5 in %s; skipping initial trajectories.", run.exp_dir)
     ax_mid.set_title("Observed Modes + Initial Trajectories", fontweight="bold")
+    ax_mid.set_ylabel("Detector Height", fontweight="bold")
+    ax_mid.tick_params(labelleft=True, labelsize=12)
+    ax_right.tick_params(labelsize=12)
 
     if run.theta_est is not None:
         draw_mode_trajectories(ax_right, run, run.theta_est, pcols,
-                               labels=[rf"$r^*_{k + 1}(t)$" for k in range(run.N)])
-        ax_right.legend(loc="upper right", ncols=2, handlelength=1.5, columnspacing=1.0)
+                               labels=[rf"$r^*_{k + 1}(t)$" for k in range(run.N)], alpha=0.6)
     ax_right.set_title("Observed Modes + Fitted Trajectories", fontweight="bold")
     return fig

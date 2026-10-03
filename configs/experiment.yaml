@@ -1,14 +1,14 @@
 device: null
-seed: 42
+seed: 3
 add_sino_noise: true
-snr_db: 40
-# snr_db: 15
+# snr_db: 40
+snr_db: 15
 # snr_db: 20
 # snr_db: 10
 
 model: 
-  sim_n_gaussians: 8
-  reco_n_gaussians: 8
+  sim_n_gaussians: 5
+  reco_n_gaussians: 5
 
 geometry:
   sources:

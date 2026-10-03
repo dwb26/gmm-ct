@@ -22,6 +22,15 @@ def _to_numpy_theta(theta: dict | None) -> dict | None:
     return out
 
 
+def _to_array(v) -> np.ndarray:
+    """Flat float array from a tensor, array or list of (0-d) tensors/floats."""
+    if hasattr(v, "detach"):
+        v = v.detach().cpu().numpy()
+    elif isinstance(v, (list, tuple)):
+        v = [x.detach().cpu().item() if hasattr(x, "detach") else x for x in v]
+    return np.atleast_1d(np.asarray(v, dtype=float)).ravel()
+
+
 @dataclass
 class Run:
     """All inputs a figure needs. Detector axis is stored in ascending height."""
@@ -35,7 +44,7 @@ class Run:
     detector_x: float
     theta_true: dict
     theta_est: dict | None
-    theta_init: dict | None     # best trajectory initialisation (pre stage 1.5)
+    theta_init: dict | None     # best trajectory initialisation
     snr_db: float
     seed: int
     detected_modes: dict | None = None  # {time: [heights]} saved by the reconstruction
@@ -93,7 +102,7 @@ class Run:
                 self._modes = []
                 for tv in self.t:
                     hit = np.flatnonzero(np.isclose(keys, tv, atol=1e-8))
-                    self._modes.append(np.array(saved[keys[hit[0]]], dtype=float) if len(hit) else np.empty(0))
+                    self._modes.append(_to_array(saved[keys[hit[0]]]) if len(hit) else np.empty(0))
             else:
                 self._modes = self._redetect_modes()
         return self._modes
@@ -115,7 +124,8 @@ class Run:
         out = []
         for row in self.proj[:, ::-1]:
             params = model.fit_gmm_1d_fixed_N(torch.tensor(row.copy()), coords)
-            out.append(params[params[:, 1] > 0.075, 0].numpy() if len(params) else np.empty(0))
+            params = params[params[:, 1] > 0.075]
+            out.append(_to_array(params[:, 0]))
         return out
 
 
