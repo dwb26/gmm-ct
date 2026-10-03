@@ -92,6 +92,10 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
         title="Estimated Parameters",
     )
 
+    peak_data = getattr(model, "peak_data", None)
+    detected_modes = dict(peak_data.receiver_heights_by_time) if peak_data is not None else None
+    detected_modes = detected_modes or None
+
     # --- Save Standalone Reconstruction Checkpoint ---
     torch.save(
         {
@@ -107,7 +111,8 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
             "theta_pre_stage2": model.theta_pre_stage2,
             "theta_est": soln_dict,
             # Modes detected in the projections: {time: [heights]} (times with no modes are absent)
-            "detected_modes": dict(model.peak_data.receiver_heights_by_time),
+            # Only the peak-based pipeline detects modes; other baselines store None
+            "detected_modes": detected_modes,
             "runtime_seconds": wall_clock() - start,
             "config": {
                 "n_gaussians": cfg.reco_n_gaussians,
