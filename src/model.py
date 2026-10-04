@@ -736,7 +736,7 @@ class GMM_reco:
     def _stage_multistart_joint(
         self, 
         soln_dict: dict[str, list[torch.Tensor]], 
-        warm_start: bool = True,
+        warm_start: bool = False,
     ) -> dict[str, list[torch.Tensor]]:
         """Multi-start L-BFGS joint optimization to refine α, U_skew, and ω."""
         logger.info("Stage 2: Multi-start joint optimization")
