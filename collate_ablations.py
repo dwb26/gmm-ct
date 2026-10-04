@@ -37,95 +37,44 @@ VARIANTS: Dict[str, str] = {
 N_PARTICLES: List[int] = [1, 2, 5, 8]
 SEEDS: List[int] = list(range(10))
 
-# Relative L2 error of an all-zero density estimate is exactly 1, so a diverged run is
-# scored as "no better than predicting nothing".
-FAILURE_PENALTY = 1.0
-
-
 def collate_results():
     summary_rows = []
-    penalised_rows = []
-    
+
     for N in N_PARTICLES:
         row = {"N Particles": N}
-        pen_row = {"N Particles": N}
-        
+
         for label, dir_name in VARIANTS.items():
             variant_dir = BASE_DIR / dir_name
             errors = []
-            n_missing = n_errored = 0
-            
+
             for seed in SEEDS:
-                exp_folder = f"snr{SNR_DB}_N{N}_nproj128_seed{seed}"
-                exp_dir = variant_dir / exp_folder
-                
+                exp_dir = variant_dir / f"snr{SNR_DB}_N{N}_nproj128_seed{seed}"
                 if not exp_dir.exists():
-                    n_missing += 1
                     continue
-                
                 try:
-                    record = run_analysis(exp_dir=exp_dir)
-                    err = record['rel_l2_density_error']
-                    
-                    if np.isfinite(err):
-                        errors.append(err)
-                    else:
-                        n_errored += 1
+                    errors.append(run_analysis(exp_dir=exp_dir)["rel_l2_density_error"])
                 except Exception:
                     logger.exception("Analysis failed for %s", exp_dir)
-                    n_errored += 1
-                    
-            n_completed = len(errors)
-            n_present = len(SEEDS) - n_missing
-            n_diverged = n_present - n_completed
 
-            # Penalised statistics over every run that exists, diverged ones scored at FAILURE_PENALTY
-            all_errs = errors + [FAILURE_PENALTY] * n_diverged
-            if all_errs:
-                pen_std = np.std(all_errs, ddof=1) if len(all_errs) > 1 else 0.0
-                pen_row[label] = (f"{np.mean(all_errs):.4f} ± {pen_std:.4f}"
-                                  f" (median {np.median(all_errs):.4f}; {n_diverged}/{n_present} diverged)")
-            else:
-                pen_row[label] = "Missing (no run folders)"
-            
-            if n_completed > 0:
-                mean_err = np.mean(errors)
-                # Compute std with ddof=1 when N > 1 to avoid std=0.0 on single samples
-                std_err = np.std(errors, ddof=1) if n_completed > 1 else 0.0
-                
-                # Statistics over converged runs only, with the number of divergences alongside
-                if n_diverged:
-                    row[label] = f"{mean_err:.4f} ± {std_err:.4f} ({n_diverged}/{n_present} diverged)"
-                else:
-                    row[label] = f"{mean_err:.4f} ± {std_err:.4f}"
-            elif n_missing == len(SEEDS):
+            if not errors:
                 row[label] = "Missing (no run folders)"
-            else:
-                row[label] = "Failed (Divergent)"
-                
+                continue
+
+            std = np.std(errors, ddof=1) if len(errors) > 1 else 0.0
+            row[label] = f"{np.median(errors):.4f} ± {std:.4f}"
+
         summary_rows.append(row)
-        penalised_rows.append(pen_row)
-        
-    df = pd.DataFrame(summary_rows)
-    df.set_index("N Particles", inplace=True)
-    
+
+    df = pd.DataFrame(summary_rows).set_index("N Particles")
     logger.info("\n" + "=" * 80)
     logger.info("                     GMM-CT ABLATION & BASELINE SUMMARY                     ")
     logger.info("=" * 80)
     logger.info(df.to_markdown())
     logger.info("=" * 80 + "\n")
 
-    # Export to CSV for direct import into Overleaf/LaTeX or Pandas
-    output_csv = BASE_DIR / "ablation_summary.csv"
-    df.to_csv(output_csv)
-    logger.info(f"Summary saved to: {output_csv}")
+    df.to_csv(CSV_PATH)
+    logger.info(f"Summary (median ± std) saved to: {CSV_PATH}")
 
-    pen_df = pd.DataFrame(penalised_rows).set_index("N Particles")
-    logger.info("\nIncluding diverged runs (scored as error %.1f):\n%s", FAILURE_PENALTY, pen_df.to_markdown())
-    pen_csv = BASE_DIR / "ablation_summary_with_failures.csv"
-    pen_df.to_csv(pen_csv)
-    logger.info(f"Summary including failures saved to: {pen_csv}")
-    
 # ========================================================================
 # LaTeX Section
 # ========================================================================
@@ -168,7 +117,7 @@ def convert_csv_to_latex():
     latex_lines.append(r"\begin{table*}[t]")
     latex_lines.append(r"\centering")
     latex_lines.append(r"\caption{Ablation and Baseline Benchmark ($\text{SNR} = 20\,\text{dB}$). "
-                        r"Reported values indicate Mean Spatio-Temporal Relative $L_2$ Error $\pm$ Standard Deviation "
+                        r"Reported values indicate Median Spatio-Temporal Relative $L_2$ Error $\pm$ Standard Deviation "
                         r"across 10 random seeds.}")
     latex_lines.append(r"\label{tab:gmm_ct_ablation}")
     latex_lines.append(r"\vspace{2mm}")

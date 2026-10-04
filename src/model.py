@@ -25,7 +25,12 @@ from .utils import (
 )
 from .structures import PeakData
 
-V0_RAW_BOUND = 50.0
+# Shared L-BFGS settings, used by every optimiser in the pipeline
+OPT_TOL = 1e-10
+OPT_GTOL = 1e-8
+OPT_MAX_ITER = 5000
+
+V0_RAW_BOUND = 1000.0
 
 
 def _nan_safe_argmin(values) -> int:
@@ -55,7 +60,7 @@ class GMM_reco:
         exp_dir: str,                           # Directory for diagnostic plots.
         device: str = "cpu",                    # Computation device (auto-detected when None).
         save_diagnostics: bool = True,          # Save diagnostic plots at the end of Stage 1
-        peak_detection_method: str = "gaussian_fit"
+        peak_detection_method: str = "gaussian_fit",
     ):
         self.d = d
         self.N = N
@@ -64,12 +69,13 @@ class GMM_reco:
         self.omega_min = omega_min
         self.omega_max = omega_max
         self.n_traj_trials = 10 * N
+        self.v0_init_mean = (1.0, 1.0)
+        self.v0_init_std = (0.5, 2.0)
         self.n_omega_inits = 1 * N
         self.save_diagnostics = save_diagnostics
         self.t_observable = []
         self.peak_detection_method = peak_detection_method
-        self.theta_pre_stage1_5 = None
-        self.theta_pre_stage2 = None
+        self.theta_pre_stage_2 = None
 
         # Device
         self.device = (
@@ -173,7 +179,6 @@ class GMM_reco:
 
             # Stage 1.5b: NNLS for Amplitudes (α)
             soln_dict = self._stage_alpha_initialization(soln_dict)
-            self.theta_pre_stage2 = self._clone_dict(soln_dict)
 
         logger.info("Stage 2: Running Stage 2 Multi-Start")
         soln_dict = self._stage_multistart_joint(soln_dict)
@@ -229,20 +234,15 @@ class GMM_reco:
                 loss_closure,
                 x0=x0_init,
                 method='l-bfgs',
-                tol=1e-8,
-                options={'gtol': 1e-8, 'max_iter': 1500, 'disp': False},
+                tol=OPT_TOL,
+                options={'gtol': OPT_GTOL, 'max_iter': OPT_MAX_ITER, 'disp': False},
             )
             errors.append(float(res_trial.fun.detach().cpu().item()))
             results.append(res_trial)
             
         best_idx = _nan_safe_argmin(errors)
-        best_init = init_values[best_idx]
         best_res = results[best_idx]
         soln_dict = self.construct_soln_dict(best_res, mode='joint_with_v0')
-
-        # Store pre-stage initialization state for consistency
-        self.theta_pre_stage1_5 = self.theta_dict_init.copy()
-        self.theta_pre_stage1_5["v0s"] = best_init
         
         return soln_dict
         
@@ -282,8 +282,8 @@ class GMM_reco:
                 self._loss_trajectory,
                 x0=theta_tensor_init, 
                 method='l-bfgs',
-                tol=1e-8, 
-                options={'gtol': 1e-8, 'max_iter': 1500, 'disp': False},
+                tol=OPT_TOL,
+                options={'gtol': OPT_GTOL, 'max_iter': OPT_MAX_ITER, 'disp': False},
             )
             errors.append(float(res_trial.fun.detach().cpu().item()))
             results.append(res_trial)
@@ -293,14 +293,15 @@ class GMM_reco:
         best_res = results[best_idx]
         soln_dict = self.construct_soln_dict(best_res)
         
-        self.theta_pre_stage1_5 = self.theta_dict_init.copy()
-        self.theta_pre_stage1_5["v0s"] = best_init
+        self.theta_pre_stage_2 = self.theta_dict_init.copy()
+        self.theta_pre_stage_2["v0s"] = best_init
 
         soln_dict["v0s"] = [v0_n.clone().detach() for v0_n in soln_dict["v0s"]]
         soln_dict = self.refine_initial_velocities_via_newton_raphson(soln_dict, best_res)
+        
         soln_dict["alphas"] = [alpha.clone().detach() for alpha in self.theta_dict_init["alphas"]]
         soln_dict["omegas"] = [omega.clone().detach() for omega in self.theta_dict_init["omegas"]]
-        soln_dict["U_skews"] = self.initialize_anisotropic_U_skews()
+        soln_dict["U_skews"] = self.initialize_isotropic_U_skews()
                 
         return soln_dict    
     
@@ -319,28 +320,13 @@ class GMM_reco:
         }
 
     def initialize_initial_velocities(self) -> list[torch.Tensor]:
-        return generate_velocity_ensemble(N=self.N, device=self.device)
+        return generate_velocity_ensemble(
+            N=self.N, mean=self.v0_init_mean, std=self.v0_init_std, device=self.device
+        )
         
     def initialize_isotropic_U_skews(self):
-        return [torch.diag(torch.tensor([35.0, 35.0], dtype=torch.float64, device=self.device)) for _ in range(self.N)]        
-    
-    def initialize_anisotropic_U_skews(self):
-        """Initialise U_skew as diag(30, 15) + small upper-triangular noise.
-
-        The 4:1 aspect ratio ensures Gaussians have a detectable rotation
-        signature in the projections.  Noise on the off-diagonal helps the
-        optimizer recover the true off-diagonal shape.
-        """
-        diag_vals = torch.tensor([35.0, 20.0], dtype=torch.float64, device=self.device)
-        U_skews = []
-        for _ in range(self.N):
-            U_k = torch.diag(diag_vals).clone()
-            rows, cols = torch.triu_indices(self.d, self.d, offset=1, device=self.device)
-            noise = torch.randn(len(rows), dtype=torch.float64, device=self.device)
-            U_k[rows, cols] = U_k[rows, cols] + noise
-            U_skews.append(U_k)
-            
-        return U_skews
+        # U_skews = [torch.diag(torch.tensor([35.0, 35.0], dtype=torch.float64, device=self.device)) for _ in range(self.N)]
+        return [torch.tensor([[45.0, 0], [0, 45.0]], dtype=torch.float64, device=self.device) for _ in range(self.N)]
     
     # ==================================================================
     # Peak Detection & Trajectory Loss Function
@@ -410,7 +396,6 @@ class GMM_reco:
 
         fitted_gaussian_params = {}
         records = []
-        # data = []
 
         for n_p, proj_row in enumerate(proj_tensor):
             params = self.fit_gmm_1d_fixed_N(
@@ -544,8 +529,9 @@ class GMM_reco:
         res = minimize(
             loss_fn, 
             params, 
-            method='l-bfgs', 
-            options={'max_iter': 5000, 'gtol': 1e-6, 'disp': False}
+            method='l-bfgs',
+            tol=OPT_TOL,
+            options={'max_iter': OPT_MAX_ITER, 'gtol': OPT_GTOL, 'disp': False}
         )
         
         p_opt = res.x
@@ -705,6 +691,8 @@ class GMM_reco:
                 t_obs, receivers_n, self.sources[0],
                 soln_dict['x0s'][gaussian_idx],
                 soln_dict['a0s'][gaussian_idx],
+                tol=OPT_TOL,
+                max_iter=OPT_MAX_ITER,
             )
             v0s_refined.append(v0_n_refined.requires_grad_(True))
 
@@ -740,138 +728,6 @@ class GMM_reco:
 
         # Return total scalar absolute derivative sum across time steps
         return torch.sum(torch.abs(R_k))
-
-    # ==================================================================
-    # Stage 1.5 – omega grid search
-    # ==================================================================
-
-    def _stage_omega_initialization(
-        self, 
-        soln_dict: dict[str, list[torch.tensor]],
-        n_grid: int = 200,
-    ) -> dict[str, list[torch.tensor]]:
-        """Per-Gaussian omega estimation via residual-sinogram grid search.
-
-        For each Gaussian k, subtracts all other Gaussians' contributions from
-        the observed sinogram, then sweeps a uniform grid of omega candidates
-        and keeps the one that minimises the residual norm.
-        """
-        n_gaussians = len(soln_dict['alphas'])
-        n_planes = math.comb(self.d, 2)
-        logger.info(
-            "Stage 1.5a: Residual-sinogram ω grid search (%d plane(s), %d candidates)",
-            n_planes, n_grid,
-        )
-        proj_obs = self.proj_data
-        t = self.t
-        omega_candidates = torch.linspace(
-            self.omega_min, self.omega_max, n_grid,
-            dtype=torch.float64, device=self.device,
-        )
-        
-        for n in range(n_gaussians):
-            # Compute background projection (all Gaussians EXCEPT n)
-            bg_dict = {key: list(vals) for key, vals in soln_dict.items()}
-            bg_dict["alphas"] = [
-                torch.zeros(1, dtype=torch.float64, device=self.device) if j == n
-                else soln_dict["alphas"][j]
-                for j in range(n_gaussians)
-            ]
-            
-            with torch.no_grad():
-                proj_bg = self.process_projections(self.generate_projections(t=t, theta_dict=bg_dict))
-                proj_resid_n = proj_obs - proj_bg
-                
-            omega_n = soln_dict["omegas"][n].clone()
-            
-            for plane_idx in range(n_planes):
-                best_loss_n = torch.norm(proj_resid_n).item()
-                best_val_n = omega_n[plane_idx].clone()
-                
-                for omega_val in omega_candidates:
-                    test_omega_n = omega_n.clone()
-                    test_omega_n[plane_idx] = omega_val
-                    
-                    test_dict = {
-                        "alphas": [soln_dict["alphas"][n]],
-                        "U_skews": [soln_dict["U_skews"][n]],
-                        "omegas": [test_omega_n],
-                        "x0s": [soln_dict["x0s"][n]],
-                        "v0s": [soln_dict["v0s"][n]],
-                        "a0s": [soln_dict["a0s"][n]],
-                    }
-                    
-                    orig_N = self.N
-                    try:
-                        self.N = 1
-                        with torch.no_grad():
-                            proj_n = self.process_projections(self.generate_projections(t=t, theta_dict=test_dict))
-                    finally:
-                        self.N = orig_N
-                    
-                    loss_n = torch.norm(proj_resid_n - proj_n).item()
-                    if loss_n < best_loss_n:
-                        best_loss_n = loss_n
-                        best_val_n = omega_val
-                        
-                omega_n[plane_idx] = best_val_n
-                
-            soln_dict["omegas"][n] = omega_n
-
-        return soln_dict
-        
-    # ==================================================================
-    # Stage 1.5b – alpha NNLS
-    # ==================================================================
-
-    def _stage_alpha_initialization(self, soln_dict):
-        """Initialise attenuation coefficients via non-negative least squares.
-
-        With trajectories, shapes and omegas fixed, the forward model is linear
-        in alphas.  Solves ``min_{α≥0} ‖Φα − p_obs‖₂²`` in closed form.
-        """
-        logger.info("Stage 1.5b: NNLS alpha initialization")
-        
-        # Restrict to observable time steps and peak data
-        t_obs = self.t[self.peak_data.observable_indices]
-        p_obs = self.proj_data[self.peak_data.observable_indices]
-        T_obs, R = p_obs.shape
-        
-        Phi = torch.zeros(T_obs * R, self.N, dtype=torch.float64, device=self.device)
-        
-        with torch.no_grad():
-            orig_N = self.N
-            self.N = 1
-            for n in range(orig_N):
-                single_dict = {
-                    "alphas": [torch.ones(1, dtype=torch.float64, device=self.device)],
-                    "U_skews": [soln_dict["U_skews"][n]],
-                    "omegas": [soln_dict["omegas"][n]],
-                    "x0s": [soln_dict["x0s"][n]],
-                    "v0s": [soln_dict["v0s"][n]],
-                    "a0s": [soln_dict["a0s"][n]],
-                }
-                proj_n = self.generate_projections(t=t_obs, theta_dict=single_dict)
-                Phi[:, n] = self.process_projections(proj_n).reshape(-1)
-            self.N = orig_N
-            
-        if not torch.isfinite(Phi).all():
-            logger.warning("Non-finite values in basis matrix Φ; skipping alpha initialization.")
-            return soln_dict
-        
-        p_vec = p_obs.reshape(-1, 1)
-        
-        # Solve least squares and project onto non-negative orthant (α ≥ 0)
-        sol = torch.linalg.lstsq(Phi, p_vec, driver='gelsd')
-        alpha_hat = sol.solution.squeeze(1).clamp(min=1e-3)
-        residual = torch.norm(Phi @ alpha_hat.unsqueeze(1) - p_vec).item()
-        
-        soln_dict["alphas"] = [
-            alpha_hat[n].reshape(1).detach().clone() for n in range(self.N)
-        ]
-        logger.info("  NNLS residual ‖Φα − p_obs‖₂ = %.4e", residual)
-
-        return soln_dict
 
     # ==================================================================
     # Stage 2 – multi-start joint optimization
@@ -926,8 +782,8 @@ class GMM_reco:
                 self._loss_joint,
                 x0=theta_tensor,
                 method='l-bfgs',
-                tol=1e-10,
-                options={'gtol': 1e-8, 'max_iter': 1500, 'disp': False},
+                tol=OPT_TOL,
+                options={'gtol': OPT_GTOL, 'max_iter': OPT_MAX_ITER, 'disp': False},
             )
 
             result_dict = self.construct_soln_dict(res, mode='joint')
@@ -1211,11 +1067,11 @@ class GMM_reco:
                 idx = 0
 
                 if mode == "joint_with_v0":
-                    v0s.append(torch.stack([torch.exp(torch.clamp(row_n[idx], -5.0, 5.0)), torch.clamp(row_n[idx + 1], -V0_RAW_BOUND, V0_RAW_BOUND)]))
+                    v0s.append(torch.stack([torch.exp(torch.clamp(row_n[idx], -15.0, 15.0)), torch.clamp(row_n[idx + 1], -V0_RAW_BOUND, V0_RAW_BOUND)]))
                     idx += 2
 
                 # Alpha
-                alphas.append(torch.exp(torch.clamp(row_n[idx], -5.0, 5.0)).unsqueeze(0))
+                alphas.append(torch.exp(torch.clamp(row_n[idx], -15.0, 15.0)).unsqueeze(0))
                 idx += 1
 
                 # U_skew
@@ -1296,24 +1152,20 @@ class GMM_reco:
                 loss_closure,
                 x0=theta_tensor_init,
                 method='l-bfgs',
-                tol=1e-8,
-                options={'gtol': 1e-8, 'max_iter': 1500, 'disp': False},
+                tol=OPT_TOL,
+                options={'gtol': OPT_GTOL, 'max_iter': OPT_MAX_ITER, 'disp': False},
             )
             errors.append(float(res_trial.fun.detach().cpu().item()))
             results.append(res_trial)
         
         best_idx = _nan_safe_argmin(errors)
-        best_init = init_values[best_idx]
         best_res = results[best_idx]
         soln_dict = self.construct_soln_dict(best_res)
         
-        self.theta_pre_stage1_5 = self.theta_dict_init.copy()
-        self.theta_pre_stage1_5["v0s"] = best_init
-        
         soln_dict["v0s"] = [v0_n.clone().detach() for v0_n in soln_dict["v0s"]]
         soln_dict["alphas"] = [alpha.clone().detach() for alpha in self.theta_dict_init["alphas"]]
-        soln_dict["omegas"] = [omega.clone().detach() for omega in self.theta_dict_init["omegas"]]        
-        soln_dict["U_skews"] = self.initialize_anisotropic_U_skews()
+        soln_dict["omegas"] = [omega.clone().detach() for omega in self.theta_dict_init["omegas"]]
+        soln_dict["U_skews"] = self.initialize_isotropic_U_skews()
         
         return soln_dict
 
@@ -1377,93 +1229,152 @@ class GMM_reco:
     
     
     
-                # data.append(
-                #     {
-                #         "time_idx": int(n_p),
-                #         "time_val": time_val_scalar,
-                #         "mu": mu.detach().cpu(),
-                #         "A": A.detach().cpu(),
-                #         "sigma": sigma.detach().cpu(),
-                #     }
-                # )
+        # def initialize_anisotropic_U_skews(self):
+    #     """Initialise U_skew as diag(30, 15) + small upper-triangular noise.
+
+    #     The 4:1 aspect ratio ensures Gaussians have a detectable rotation
+    #     signature in the projections.  Noise on the off-diagonal helps the
+    #     optimizer recover the true off-diagonal shape.
+    #     """
+    #     diag_vals = torch.tensor([35.0, 20.0], dtype=torch.float64, device=self.device)
+    #     U_skews = []
+    #     for _ in range(self.N):
+    #         U_k = torch.diag(diag_vals).clone()
+    #         rows, cols = torch.triu_indices(self.d, self.d, offset=1, device=self.device)
+    #         noise = torch.randn(len(rows), dtype=torch.float64, device=self.device)
+    #         U_k[rows, cols] = U_k[rows, cols] + noise
+    #         U_skews.append(U_k)
+            
+    #     return U_skews
     
-    # --- 2. Diagnostic Spatial Profile Plots ---
-    # data_df = pd.DataFrame(data)
-    # out_dir = exp_dir / "fitted_plots"
-    # out_dir.mkdir(parents=True, exist_ok=True)
+    # ==================================================================
+    # Stage 1.5 – omega grid search
+    # ==================================================================
 
-    # rcv_coords_np = rcv_coords.cpu().numpy()
-    # time_vals_in_df = data_df["time_val"].to_numpy(dtype=np.float64)
+    # def _stage_omega_initialization(
+    #     self, 
+    #     soln_dict: dict[str, list[torch.tensor]],
+    #     n_grid: int = 200,
+    # ) -> dict[str, list[torch.tensor]]:
+    #     """Per-Gaussian omega estimation via residual-sinogram grid search.
 
-    # for n_p, proj_row in enumerate(proj_tensor):
-    #     time_val_scalar = (
-    #         t[n_p].item() if isinstance(t[n_p], torch.Tensor) else float(t[n_p])
+    #     For each Gaussian k, subtracts all other Gaussians' contributions from
+    #     the observed sinogram, then sweeps a uniform grid of omega candidates
+    #     and keeps the one that minimises the residual norm.
+    #     """
+    #     n_gaussians = len(soln_dict['alphas'])
+    #     n_planes = math.comb(self.d, 2)
+    #     logger.info(
+    #         "Stage 1.5a: Residual-sinogram ω grid search (%d plane(s), %d candidates)",
+    #         n_planes, n_grid,
     #     )
-
-    #     if np.any(np.isclose(time_vals_in_df, time_val_scalar, atol=1e-8)):
-    #         fig, ax = plt.subplots(figsize=(8, 4))
-
-    #         # True projection curve
-    #         ax.plot(
-    #             rcv_coords_np,
-    #             proj_row.cpu().numpy(),
-    #             label="True",
-    #             lw=3,
-    #             color="black",
-    #             alpha=0.3,
-    #         )
-
-    #         # Retrieve row matching frame time
-    #         sub_df = data_df[
-    #             np.isclose(time_vals_in_df, time_val_scalar, atol=1e-8)
-    #         ].iloc[0]
-
-    #         mu = sub_df["mu"].to(device=device)
-    #         A = sub_df["A"].to(device=device)
-    #         sigma = sub_df["sigma"].to(device=device)
-
-    #         # Vectorized 2D GMM evaluation: [R, 1] - [K] -> [R, K]
-    #         diff = rcv_coords.unsqueeze(1) - mu.unsqueeze(0)
-    #         y_fit = torch.sum(A * torch.exp(-0.5 * (diff / sigma) ** 2), dim=1)
-
-    #         ax.plot(
-    #             rcv_coords_np,
-    #             y_fit.cpu().numpy(),
-    #             label="GMM Fit",
-    #             color="crimson",
-    #             linestyle="--",
-    #             lw=1.8,
-    #         )
-
-    #         ax.set_title(f"Time: {time_val_scalar:.3f} s (Frame {n_p})")
-    #         ax.set_xlabel("Receiver Position")
-    #         ax.set_ylabel("Amplitude")
-    #         ax.legend(loc="upper right")
-
-    #         plt.savefig(out_dir / f"obs_{n_p:03d}.png", dpi=150, bbox_inches="tight")
-    #         plt.close(fig)
-
-    # # --- 3. Trajectory Time-Series Plot ---
-    # if not peak_detection_records.empty:
-    #     fig, ax = plt.subplots(figsize=(8, 5))
-
-    #     # Filter out negligible amplitude noise components
-    #     valid_peaks = peak_detection_records[peak_detection_records["peak_val"] > 1e-4]
-
-    #     ax.scatter(
-    #         valid_peaks["time_val"],
-    #         valid_peaks["mu"],
-    #         c=valid_peaks["peak_val"],
-    #         cmap="viridis",
-    #         s=15,
-    #         alpha=0.8,
-    #         edgecolors="none",
+    #     proj_obs = self.proj_data
+    #     t = self.t
+    #     omega_candidates = torch.linspace(
+    #         self.omega_min, self.omega_max, n_grid,
+    #         dtype=torch.float64, device=self.device,
     #     )
+        
+    #     for n in range(n_gaussians):
+    #         # Compute background projection (all Gaussians EXCEPT n)
+    #         bg_dict = {key: list(vals) for key, vals in soln_dict.items()}
+    #         bg_dict["alphas"] = [
+    #             torch.zeros(1, dtype=torch.float64, device=self.device) if j == n
+    #             else soln_dict["alphas"][j]
+    #             for j in range(n_gaussians)
+    #         ]
+            
+    #         with torch.no_grad():
+    #             proj_bg = self.process_projections(self.generate_projections(t=t, theta_dict=bg_dict))
+    #             proj_resid_n = proj_obs - proj_bg
+                
+    #         omega_n = soln_dict["omegas"][n].clone()
+            
+    #         for plane_idx in range(n_planes):
+    #             best_loss_n = torch.norm(proj_resid_n).item()
+    #             best_val_n = omega_n[plane_idx].clone()
+                
+    #             for omega_val in omega_candidates:
+    #                 test_omega_n = omega_n.clone()
+    #                 test_omega_n[plane_idx] = omega_val
+                    
+    #                 test_dict = {
+    #                     "alphas": [soln_dict["alphas"][n]],
+    #                     "U_skews": [soln_dict["U_skews"][n]],
+    #                     "omegas": [test_omega_n],
+    #                     "x0s": [soln_dict["x0s"][n]],
+    #                     "v0s": [soln_dict["v0s"][n]],
+    #                     "a0s": [soln_dict["a0s"][n]],
+    #                 }
+                    
+    #                 orig_N = self.N
+    #                 try:
+    #                     self.N = 1
+    #                     with torch.no_grad():
+    #                         proj_n = self.process_projections(self.generate_projections(t=t, theta_dict=test_dict))
+    #                 finally:
+    #                     self.N = orig_N
+                    
+    #                 loss_n = torch.norm(proj_resid_n - proj_n).item()
+    #                 if loss_n < best_loss_n:
+    #                     best_loss_n = loss_n
+    #                     best_val_n = omega_val
+                        
+    #             omega_n[plane_idx] = best_val_n
+                
+    #         soln_dict["omegas"][n] = omega_n
 
-    #     ax.set_xlabel("Time (s)")
-    #     ax.set_ylabel("Fitted Mean Position (μ)")
-    #     ax.set_title("Peak Trajectories Over Time")
-    #     ax.grid(True, linestyle=":", alpha=0.6)
+    #     return soln_dict
+        
+    # # ==================================================================
+    # # Stage 1.5b – alpha NNLS
+    # # ==================================================================
 
-    #     plt.savefig(exp_dir / "time_series.png", dpi=150, bbox_inches="tight")
-    #     plt.close(fig)
+    # def _stage_alpha_initialization(self, soln_dict):
+    #     """Initialise attenuation coefficients via non-negative least squares.
+
+    #     With trajectories, shapes and omegas fixed, the forward model is linear
+    #     in alphas.  Solves ``min_{α≥0} ‖Φα − p_obs‖₂²`` in closed form.
+    #     """
+    #     logger.info("Stage 1.5b: NNLS alpha initialization")
+        
+    #     # Restrict to observable time steps and peak data
+    #     t_obs = self.t[self.peak_data.observable_indices]
+    #     p_obs = self.proj_data[self.peak_data.observable_indices]
+    #     T_obs, R = p_obs.shape
+        
+    #     Phi = torch.zeros(T_obs * R, self.N, dtype=torch.float64, device=self.device)
+        
+    #     with torch.no_grad():
+    #         orig_N = self.N
+    #         self.N = 1
+    #         for n in range(orig_N):
+    #             single_dict = {
+    #                 "alphas": [torch.ones(1, dtype=torch.float64, device=self.device)],
+    #                 "U_skews": [soln_dict["U_skews"][n]],
+    #                 "omegas": [soln_dict["omegas"][n]],
+    #                 "x0s": [soln_dict["x0s"][n]],
+    #                 "v0s": [soln_dict["v0s"][n]],
+    #                 "a0s": [soln_dict["a0s"][n]],
+    #             }
+    #             proj_n = self.generate_projections(t=t_obs, theta_dict=single_dict)
+    #             Phi[:, n] = self.process_projections(proj_n).reshape(-1)
+    #         self.N = orig_N
+            
+    #     if not torch.isfinite(Phi).all():
+    #         logger.warning("Non-finite values in basis matrix Φ; skipping alpha initialization.")
+    #         return soln_dict
+        
+    #     p_vec = p_obs.reshape(-1, 1)
+        
+    #     # Solve least squares and project onto non-negative orthant (α ≥ 0)
+    #     sol = torch.linalg.lstsq(Phi, p_vec, driver='gelsd')
+    #     alpha_hat = sol.solution.squeeze(1).clamp(min=1e-3)
+    #     residual = torch.norm(Phi @ alpha_hat.unsqueeze(1) - p_vec).item()
+        
+    #     soln_dict["alphas"] = [
+    #         alpha_hat[n].reshape(1).detach().clone() for n in range(self.N)
+    #     ]
+    #     logger.info("  NNLS residual ‖Φα − p_obs‖₂ = %.4e", residual)
+
+    #     return soln_dict

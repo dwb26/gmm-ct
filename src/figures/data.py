@@ -174,7 +174,7 @@ def load_run(exp_dir: str | Path) -> Run:
         detector_x=float(receivers[0, 0]),
         theta_true=_to_numpy_theta(gt["theta_true"]),
         theta_est=_to_numpy_theta(rec.get("theta_est")),
-        theta_init=_to_numpy_theta(rec.get("theta_pre_stage1_5")),
+        theta_init=_to_numpy_theta(rec.get("theta_pre_stage_2")),
         snr_db=float(gt["config"]["snr_db"]),
         seed=gt["config"]["seed"],
         detected_modes=rec.get("detected_modes"),

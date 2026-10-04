@@ -11,11 +11,6 @@ from .model import GMM_reco
 
 from .visualization.publication import (
     animate_temporal_gmm_comparison,
-    # plot_acquisition_geometry_exact,
-    plot_individual_gaussian_reconstruction,
-    plot_temporal_gmm_comparison,
-    plot_projection_modes,
-    plot_sinogram,
     reorder_theta_to_match_true,
 )
 
@@ -53,7 +48,7 @@ def compute_integrated_l2_density(
     """Computes spatio-temporal L2 density errors in a single pass.
     
     Returns:
-        Tuple[float, float]: (absolute_l2_error, relative_l2_error)
+        Tuple[float, float]: (absolute squared L2 error, relative squared L2 error)
     """
     d = gt_dict['config']['d']
     N = gt_dict['config']['N']
@@ -116,13 +111,9 @@ def run_analysis(exp_dir: Path) -> dict:
 
     # And the experiment parameters
     theta_true = gt["theta_true"]
-    theta_pre_stage1_5 = rec.get("theta_pre_stage1_5")
-    theta_pre_stage2 = rec.get("theta_pre_stage2")
     theta_est = rec["theta_est"]
     
     theta_est_matched, _ = reorder_theta_to_match_true(theta_true, theta_est, N)
-    if theta_pre_stage1_5 is not None:
-        theta_pre_stage1_5, _ = reorder_theta_to_match_true(theta_true, theta_est, N)
 
     # 1. Motion Errors (Kinematic)
     true_v0 = torch.stack(gt["params"]["v0s"])
@@ -150,82 +141,26 @@ def run_analysis(exp_dir: Path) -> dict:
     U_rmse = torch.mean(U_err).item()
     U_median_err = torch.median(U_err).item()
 
-    # 3. Joint Physical Density Metric
-    l2_err, rel_l2_err = compute_integrated_l2_density(
+    # Trajectory error: RMS distance between true and estimated centres over time
+    t_s = t.to(torch.float64).reshape(1, -1, 1)
+    def _traj(th):
+        x0 = torch.stack(th["x0s"]).to(torch.float64)[:, None, :]
+        v0 = torch.stack(th["v0s"]).to(torch.float64)[:, None, :]
+        a0 = torch.stack(th["a0s"]).to(torch.float64)[:, None, :]
+        return x0 + v0 * t_s + 0.5 * a0 * t_s**2
+    traj_err = torch.sqrt(torch.mean(torch.sum((_traj(theta_true) - _traj(theta_est_matched)) ** 2, dim=2), dim=1))
+    traj_rmse = torch.mean(traj_err).item()
+    traj_median_err = torch.median(traj_err).item()
+
+    # 3. Joint Physical Density Metric (abs/rel are SQUARED L2; the reported
+    # headline metric is the relative L2 norm, i.e. the square root)
+    l2_err, rel_l2_sq = compute_integrated_l2_density(
         exp_dir=exp_dir,
         gt_dict=gt,
         gt_params=theta_true,
         est_params=theta_est_matched,
     )
-    
-    # --- PDF Figure Generation ---
-    # logger.info("Generating figure plots...")
-
-    # # Static comparison plots
-    # if theta_pre_stage1_5 is not None:
-    #     plot_temporal_gmm_comparison(
-    #         sources=sources, 
-    #         receivers=receivers, 
-    #         theta_true=theta_true, 
-    #         theta_est=theta_pre_stage1_5, 
-    #         output_dir=exp_dir,
-    #         proj_data=proj_data,
-    #         t=t, K=N, d=d,
-    #         filename=exp_dir / "pre_stage_1_5_temporal_gmm_comparison.pdf",
-    #         title="Stage 2 Initialization",
-    #     )
-    #     plot_individual_gaussian_reconstruction(
-    #         theta_true=theta_true, 
-    #         theta_est=theta_est, 
-    #         K=N, d=d,
-    #         gaussian_indices=range(N),
-    #         filename=exp_dir / "pre_stage_1_5_individual_gaussian_reconstruction.pdf",
-    #         theta_init=theta_pre_stage1_5,
-    #     )
-        
-    # if theta_pre_stage2 is not None:
-    #     plot_temporal_gmm_comparison(
-    #         sources=sources,
-    #         receivers=receivers,
-    #         theta_true=theta_true,
-    #         theta_est=theta_pre_stage2,
-    #         output_dir=exp_dir,
-    #         proj_data=proj_data,
-    #         t=t, K=N, d=d,
-    #         filename=exp_dir / "pre_stage_2_temporal_gmm_comparison.pdf",
-    #         title="Stage 2 Initialization",
-    #     )
-    #     plot_individual_gaussian_reconstruction(
-    #         theta_true=theta_true, 
-    #         theta_est=theta_est, 
-    #         K=N, d=d,
-    #         gaussian_indices=range(N),
-    #         filename=exp_dir / "pre_stage_2_individual_gaussian_reconstruction.pdf",
-    #         theta_init=theta_pre_stage2,
-    #     )
-
-    # # Time captures
-    # plot_temporal_gmm_comparison(
-    #     sources=sources,
-    #     receivers=receivers,
-    #     theta_true=theta_true,
-    #     theta_est=theta_est,
-    #     t=t, K=N, d=d,
-    #     output_dir=exp_dir,
-    #     proj_data=proj_data,
-    #     filename=exp_dir / "temporal_gmm_comparison.pdf",
-    #     title="Reconstruction",
-    # )
-    
-    # proj_2d = proj_data[0] if isinstance(proj_data, (list, tuple)) else proj_data
-    # plot_sinogram(proj_2d, t, receivers, filename=exp_dir / "observed_sinogram.pdf")        
-    # plot_projection_modes(
-    #     proj_mixture=proj_2d, 
-    #     t=t, 
-    #     receivers=receivers,
-    #     title="Projection Modes",
-    #     filename=exp_dir / "projection_modes.pdf"
-    # )
+    rel_l2_err = float(np.sqrt(rel_l2_sq))
     
     # --- Animation ---
     # logger.info("Generating animation...")
@@ -239,7 +174,6 @@ def run_analysis(exp_dir: Path) -> dict:
     #     proj_data=proj_data,
     #     filename=exp_dir / "temporal_gmm_comparison.mp4",
     # )
-
     # logger.info("All analysis outputs written to: %s", exp_dir)
     
     import matplotlib.pyplot as plt
@@ -257,24 +191,19 @@ def run_analysis(exp_dir: Path) -> dict:
         "omega_rmse": omega_rmse,
         "alpha_rmse": alpha_rmse,
         "U_rmse": U_rmse,
+        "traj_rmse": traj_rmse,
         
         # Robust Median Parameter Errors
         "v0_median_err": v0_median_err,
         "omega_median_err": omega_median_err,
         "alpha_median_err": alpha_median_err,
         "U_median_err": U_median_err,
+        "traj_median_err": traj_median_err,
         
         # Joint Spatial/Temporal Errors
-        "l2_density_error": l2_err,
-        "rel_l2_density_error": rel_l2_err,
+        "l2_density_error": l2_err,  # squared, absolute
+        "rel_l2_density_error": rel_l2_err,  # relative L2 norm (sqrt of squared ratio)
+        "rel_l2_density_error_sq": rel_l2_sq,
         "log_l2_density_error": np.log10(l2_err + 1e-12),
         "log_rel_l2_density_error": np.log10(rel_l2_err + 1e-12),
     }
-
-    # plot_acquisition_geometry_exact(
-    #     sources=sources, 
-    #     receivers=receivers, 
-    #     d=d,
-    #     filename=exp_dir / "acquisition_geometry_exact.pdf",
-    # )
-    

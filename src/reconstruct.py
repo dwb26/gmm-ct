@@ -70,6 +70,15 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
     exp_dir = Path(cfg.exp_dir)
     proj_data, t = _load_projection_data(exp_dir / 'projections.pt', device)
     model = GMM_reco.from_config(cfg)
+
+    # Optional sensitivity perturbations of what the reconstruction assumes
+    rc = cfg.reconstruction
+    model.v0_init_mean = getattr(rc, "init_v_mean", None) or model.v0_init_mean
+    model.v0_init_std = getattr(rc, "init_v_std", None) or model.v0_init_std
+    offset = getattr(rc, "x0_offset", None)
+    if offset is not None:
+        shift = torch.tensor(offset, dtype=torch.float64, device=model.x0s[0].device)
+        model.x0s = [x0 + shift for x0 in model.x0s]
     
     # --- Run reconstruction ---
     pipeline_mode = getattr(cfg.reconstruction, "pipeline_mode", "full")
@@ -107,11 +116,8 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
                 "omegas": soln_dict['omegas'],      # Shape: [N]
                 "U_skews": soln_dict['U_skews'],    # Shape: [N, 2, 2]
             },
-            "theta_pre_stage1_5": getattr(model, "theta_pre_stage1_5", None),
-            "theta_pre_stage2": model.theta_pre_stage2,
+            "theta_pre_stage_2": getattr(model, "theta_pre_stage_2", None),
             "theta_est": soln_dict,
-            # Modes detected in the projections: {time: [heights]} (times with no modes are absent)
-            # Only the peak-based pipeline detects modes; other baselines store None
             "detected_modes": detected_modes,
             "runtime_seconds": wall_clock() - start,
             "config": {

@@ -11,9 +11,6 @@ or allows each of the three steps to be called individually; i.e.
     python -m src.cli analysis --config configs/experiment.yaml --exp-dir data/seed1_N8_nproj150
 """
 
-import os
-import torch
-
 import argparse
 import logging
 import sys
@@ -63,20 +60,26 @@ def _add_common_args(parser: argparse.ArgumentParser):
         help="Pipeline execution mode for ablation studies",
     )
     parser.add_argument(
-        "--seed", 
-        type=int, 
+        "--seed",
+        type=int,
         help="Override random seed"
     )
     parser.add_argument(
-        "--sim-n-gaussians", 
-        type=int, 
+        "--sim-n-gaussians",
+        type=int,
         help="Override N simulation particles"
     )
     parser.add_argument(
-        "--reco-n-gaussians", 
+        "--reco-n-gaussians",
         type=int, 
         help="Override N reconstruction particles"
     )
+    parser.add_argument("--init-v-mean", type=float, nargs=2, default=None,
+                        help="Sensitivity: mean of the velocity initialisation prior (vx vy)")
+    parser.add_argument("--init-v-std", type=float, nargs=2, default=None,
+                        help="Sensitivity: std of the velocity initialisation prior (vx vy)")
+    parser.add_argument("--x0-offset", type=float, nargs=2, default=None,
+                        help="Sensitivity: offset added to the assumed initial positions (dx dy)")
 
 def main(argv=None):
     """Entry point for the ``gmm-ct`` CLI."""
@@ -225,13 +228,10 @@ def _apply_cli_overrides(cfg, args) -> None:
         cfg.reco_n_gaussians  = args.reco_n_gaussians
     if getattr(args, "pipeline_mode", None):
         cfg.reconstruction.pipeline_mode = args.pipeline_mode
-
-    # Temporary guardrail: Limit threads if running the naive baseline parallel to the main sweep
-    if getattr(args, "pipeline_mode", None) in ["gmm-ct", "direct-ls", "decoupled-ls"]:
-        logger.info("Configuring single-shot naive baseline run (thread limit = 2)...")
-        os.environ["OMP_NUM_THREADS"] = "2"
-        os.environ["MKL_NUM_THREADS"] = "2"
-        torch.set_num_threads(2)
+    for name in ("init_v_mean", "init_v_std", "x0_offset"):
+        if getattr(args, name, None) is not None:
+            setattr(cfg.reconstruction, name, tuple(getattr(args, name)))
+            
 
 if __name__ == "__main__":
     sys.exit(main())

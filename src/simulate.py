@@ -17,10 +17,7 @@ from .utils import (export_parameters,
                     set_random_seeds, 
                     add_sinogram_noise,)
 from .model import GMM_reco
-from .visualization.simulate_viz import (animate_simulation,
-                                         export_poster_gmm_figure,
-                                         export_poster_snapshot_sinogram_figure,
-)                                         
+from .visualization.simulate_viz import animate_simulation  
 
 logger = logging.getLogger(__name__)
 
