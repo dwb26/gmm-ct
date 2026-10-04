@@ -2,8 +2,9 @@ import re
 import pandas as pd
 from pathlib import Path
 
-CSV_PATH = Path("data/ablation_and_baseline/ablation_summary.csv")
-LATEX_OUTPUT_PATH = Path("data/ablation_and_baseline/ablation_table.tex")
+snr = 20
+CSV_PATH = Path(f"data/snr{SNR_DB}.0_ablation_and_baseline/ablation_summary.csv")
+LATEX_OUTPUT_PATH = Path(f"data/snr{SNR_DB}.0_ablation_and_baseline/ablation_table.tex")
 
 # Map CSV column headers to formatted LaTeX column titles
 COLUMN_MAPPINGS = {
@@ -22,6 +23,12 @@ def format_latex_cell(cell_value: str) -> str:
     
     if val_str in ["Failed (Divergent)", "--"]:
         return r"\text{Failed}"
+
+    # "mean ± std (k/n diverged)"; the divergence note is set in text mode outside the math
+    div_match = re.search(r"\((\d+/\d+) diverged\)", val_str)
+    if div_match:
+        num_part = val_str[:div_match.start()].strip().replace("±", r"\pm ")
+        return f"${num_part}$ \\small({div_match.group(1)} div.)"
 
     # Handles optional convergence percentage if present in CSV
     conv_match = re.search(r"\((.*?\%) conv\)", val_str)
@@ -45,7 +52,7 @@ def convert_csv_to_latex():
     latex_lines = []
     latex_lines.append(r"\begin{table*}[t]")
     latex_lines.append(r"\centering")
-    latex_lines.append(r"\caption{Ablation and Baseline Benchmark ($\text{SNR} = 80\,\text{dB}$). "
+    latex_lines.append(r"\caption{Ablation and Baseline Benchmark ($\text{SNR} = 20\,\text{dB}$). "
                         r"Reported values indicate Mean Spatio-Temporal Relative $L_2$ Error $\pm$ Standard Deviation "
                         r"across 10 random seeds.}")
     latex_lines.append(r"\label{tab:gmm_ct_ablation}")

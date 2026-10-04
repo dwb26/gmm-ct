@@ -2,9 +2,7 @@
 
 Pipeline stages inside GMM_reco.fit():
   1. _stage_trajectory_optimization   – multi-start L-BFGS on peak heights
-  2. _stage_omega_initialization       – residual-sinogram grid search
-  3. _stage_alpha_initialization       – NNLS for attenuation coefficients
-  4. _stage_multistart_joint           – multi-start L-BFGS on full projections
+  2. _stage_multistart_joint          – multi-start L-BFGS on full projections
 """
 
 import logging
@@ -26,6 +24,18 @@ from .utils import (
     compute_dataset_identifiability,
 )
 from .structures import PeakData
+
+V0_RAW_BOUND = 50.0
+
+
+def _nan_safe_argmin(values) -> int:
+    """Index of the smallest finite value; non-finite trials are never selected unless all are."""
+    arr = np.array([float(v) for v in values], dtype=float)
+    finite = np.isfinite(arr)
+    if not finite.any():
+        return 0
+    return int(np.argmin(np.where(finite, arr, np.inf)))
+
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +235,7 @@ class GMM_reco:
             errors.append(float(res_trial.fun.detach().cpu().item()))
             results.append(res_trial)
             
-        best_idx = np.argmin(np.array(errors))
+        best_idx = _nan_safe_argmin(errors)
         best_init = init_values[best_idx]
         best_res = results[best_idx]
         soln_dict = self.construct_soln_dict(best_res, mode='joint_with_v0')
@@ -278,7 +288,7 @@ class GMM_reco:
             errors.append(float(res_trial.fun.detach().cpu().item()))
             results.append(res_trial)
 
-        best_idx = np.argmin(np.array(errors))
+        best_idx = _nan_safe_argmin(errors)
         best_init = init_values[best_idx]
         best_res = results[best_idx]
         soln_dict = self.construct_soln_dict(best_res)
@@ -926,7 +936,7 @@ class GMM_reco:
             all_losses.append(final_loss)
             all_results.append(result_dict)
 
-        best_idx = int(np.argmin(all_losses))
+        best_idx = _nan_safe_argmin(all_losses)
         best_result = all_results[best_idx]
         best_loss = all_losses[best_idx]
 
@@ -1201,7 +1211,7 @@ class GMM_reco:
                 idx = 0
 
                 if mode == "joint_with_v0":
-                    v0s.append(torch.stack([torch.exp(row_n[idx]), row_n[idx + 1]]))
+                    v0s.append(torch.stack([torch.exp(torch.clamp(row_n[idx], -5.0, 5.0)), torch.clamp(row_n[idx + 1], -V0_RAW_BOUND, V0_RAW_BOUND)]))
                     idx += 2
 
                 # Alpha
@@ -1292,7 +1302,7 @@ class GMM_reco:
             errors.append(float(res_trial.fun.detach().cpu().item()))
             results.append(res_trial)
         
-        best_idx = np.argmin(np.array(errors))
+        best_idx = _nan_safe_argmin(errors)
         best_init = init_values[best_idx]
         best_res = results[best_idx]
         soln_dict = self.construct_soln_dict(best_res)

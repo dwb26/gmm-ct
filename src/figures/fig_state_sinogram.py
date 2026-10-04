@@ -57,12 +57,14 @@ def state_sinogram(run: Run, times=None) -> plt.Figure:
     ) # cmap=SINOGRAM_CMAP
     for idx, col in zip(idxs, cols):
         ax_sino.axvline(run.t[idx], color="lime", linestyle="--", linewidth=1.2)
-    ax_sino.set_xlabel("Time", fontweight="bold")
-    ax_sino.set_ylabel("Detector height", fontweight="bold")
-    ax_sino.set_title("Dynamic Sinogram", fontweight="bold")
+    ax_sino.set_xlabel("Time", fontweight="bold", fontsize=12)
+    ax_sino.set_ylabel("Detector height", fontweight="bold", fontsize=12)
+    ax_sino.set_title("Dynamic Sinogram", fontweight="bold", fontsize=12)
+    ax_sino.tick_params(labelsize=12)
     ax_sino.grid(True, color="white", alpha=0.35, linewidth=0.5)
     lo, hi = run.active_window()
     pad = 0.05 * (hi - lo)
     ax_sino.set_xlim(max(run.t[0], lo - pad), min(run.t[-1], hi + pad))
-    fig.colorbar(im, ax=ax_sino, pad=0.01, fraction=0.03, label="Projection intensity")
+    cb = fig.colorbar(im, ax=ax_sino, pad=0.01, fraction=0.03)
+    cb.set_label("Projection intensity", fontweight="bold", fontsize=12)
     return fig

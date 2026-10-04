@@ -1,10 +1,10 @@
 device: null
 seed: 3
 add_sino_noise: true
-snr_db: 80
+# snr_db: 80
 # snr_db: 40
 # snr_db: 15
-# snr_db: 20
+snr_db: 20
 # snr_db: 10
 
 model: 

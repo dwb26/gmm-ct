@@ -270,8 +270,6 @@ def run_analysis(exp_dir: Path) -> dict:
         "log_l2_density_error": np.log10(l2_err + 1e-12),
         "log_rel_l2_density_error": np.log10(rel_l2_err + 1e-12),
     }
-    
-    
 
     # plot_acquisition_geometry_exact(
     #     sources=sources, 

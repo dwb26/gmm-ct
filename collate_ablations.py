@@ -1,4 +1,5 @@
 import logging
+import re
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -15,32 +16,51 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Target Directory & Variant Mapping ---
-BASE_DIR = Path("data/ablation_and_baseline")
+SNR_DB = 20  # must match the experiment folder prefix, e.g. snr20_N5_...
+BASE_DIR = Path(f"data/snr{SNR_DB}.0_ablation_and_baseline")
+CSV_PATH = BASE_DIR / "ablation_summary.csv"
+LATEX_OUTPUT_PATH = BASE_DIR / "ablation_table.tex"
+
+# Map CSV column headers to formatted LaTeX column titles
+COLUMN_MAPPINGS = {
+    "Direct LS": r"\makecell{Direct LS \\ \small(No decoupling)}",
+    "Decoupled LS": r"\makecell{Decoupled LS}",
+    "GMM-CT": r"\makecell{GMM-CT}",
+}
 
 VARIANTS: Dict[str, str] = {
     "Direct LS": "direct-ls",
     "Decoupled LS": "decoupled-ls",
-    "Full GMM-CT (Ours)": "gmm-ct",
+    "GMM-CT": "gmm-ct",
 }
 
 N_PARTICLES: List[int] = [1, 2, 5, 8]
 SEEDS: List[int] = list(range(10))
 
+# Relative L2 error of an all-zero density estimate is exactly 1, so a diverged run is
+# scored as "no better than predicting nothing".
+FAILURE_PENALTY = 1.0
+
+
 def collate_results():
     summary_rows = []
+    penalised_rows = []
     
     for N in N_PARTICLES:
         row = {"N Particles": N}
+        pen_row = {"N Particles": N}
         
         for label, dir_name in VARIANTS.items():
             variant_dir = BASE_DIR / dir_name
             errors = []
+            n_missing = n_errored = 0
             
             for seed in SEEDS:
-                exp_folder = f"snr80_N{N}_nproj128_seed{seed}"
+                exp_folder = f"snr{SNR_DB}_N{N}_nproj128_seed{seed}"
                 exp_dir = variant_dir / exp_folder
                 
                 if not exp_dir.exists():
+                    n_missing += 1
                     continue
                 
                 try:
@@ -49,25 +69,42 @@ def collate_results():
                     
                     if np.isfinite(err):
                         errors.append(err)
+                    else:
+                        n_errored += 1
                 except Exception:
-                    continue
+                    logger.exception("Analysis failed for %s", exp_dir)
+                    n_errored += 1
                     
             n_completed = len(errors)
+            n_present = len(SEEDS) - n_missing
+            n_diverged = n_present - n_completed
+
+            # Penalised statistics over every run that exists, diverged ones scored at FAILURE_PENALTY
+            all_errs = errors + [FAILURE_PENALTY] * n_diverged
+            if all_errs:
+                pen_std = np.std(all_errs, ddof=1) if len(all_errs) > 1 else 0.0
+                pen_row[label] = (f"{np.mean(all_errs):.4f} ± {pen_std:.4f}"
+                                  f" (median {np.median(all_errs):.4f}; {n_diverged}/{n_present} diverged)")
+            else:
+                pen_row[label] = "Missing (no run folders)"
             
             if n_completed > 0:
                 mean_err = np.mean(errors)
                 # Compute std with ddof=1 when N > 1 to avoid std=0.0 on single samples
                 std_err = np.std(errors, ddof=1) if n_completed > 1 else 0.0
                 
-                # Report fraction of successful completions relative to planned seeds
-                if n_completed < len(SEEDS):
-                    row[label] = f"{mean_err:.4f} ± {std_err:.4f} ({n_completed}/{len(SEEDS)} runs)"
+                # Statistics over converged runs only, with the number of divergences alongside
+                if n_diverged:
+                    row[label] = f"{mean_err:.4f} ± {std_err:.4f} ({n_diverged}/{n_present} diverged)"
                 else:
                     row[label] = f"{mean_err:.4f} ± {std_err:.4f}"
+            elif n_missing == len(SEEDS):
+                row[label] = "Missing (no run folders)"
             else:
                 row[label] = "Failed (Divergent)"
                 
         summary_rows.append(row)
+        penalised_rows.append(pen_row)
         
     df = pd.DataFrame(summary_rows)
     df.set_index("N Particles", inplace=True)
@@ -83,5 +120,97 @@ def collate_results():
     df.to_csv(output_csv)
     logger.info(f"Summary saved to: {output_csv}")
 
+    pen_df = pd.DataFrame(penalised_rows).set_index("N Particles")
+    logger.info("\nIncluding diverged runs (scored as error %.1f):\n%s", FAILURE_PENALTY, pen_df.to_markdown())
+    pen_csv = BASE_DIR / "ablation_summary_with_failures.csv"
+    pen_df.to_csv(pen_csv)
+    logger.info(f"Summary including failures saved to: {pen_csv}")
+    
+# ========================================================================
+# LaTeX Section
+# ========================================================================
+    
+def format_latex_cell(cell_value: str) -> str:
+    """Format cell value into inline math mode $...$ for numerical error & std dev."""
+    if pd.isna(cell_value):
+        return "--"
+    
+    val_str = str(cell_value).strip()
+    
+    if val_str in ["Failed (Divergent)", "--"]:
+        return r"\text{Failed}"
+
+    # "mean ± std (k/n diverged)"; the divergence note is set in text mode outside the math
+    div_match = re.search(r"\((\d+/\d+) diverged\)", val_str)
+    if div_match:
+        num_part = val_str[:div_match.start()].strip().replace("±", r"\pm ")
+        return f"${num_part}$ \\small({div_match.group(1)} div.)"
+
+    # Handles optional convergence percentage if present in CSV
+    conv_match = re.search(r"\((.*?\%) conv\)", val_str)
+    
+    if conv_match:
+        conv_text = conv_match.group(1).replace("%", r"\%")
+        num_part = val_str[:conv_match.start()].strip().replace("±", r"\pm ")
+        return f"${num_part}$ ({conv_text})"
+    else:
+        num_part = val_str.replace("±", r"\pm ")
+        return f"${num_part}$"
+
+def convert_csv_to_latex():
+    if not CSV_PATH.exists():
+        print(f"Error: {CSV_PATH} not found. Run collate_ablations.py first.")
+        return
+
+    df = pd.read_csv(CSV_PATH, index_col=0)
+    
+    latex_lines = []
+    latex_lines.append(r"\begin{table*}[t]")
+    latex_lines.append(r"\centering")
+    latex_lines.append(r"\caption{Ablation and Baseline Benchmark ($\text{SNR} = 20\,\text{dB}$). "
+                        r"Reported values indicate Mean Spatio-Temporal Relative $L_2$ Error $\pm$ Standard Deviation "
+                        r"across 10 random seeds.}")
+    latex_lines.append(r"\label{tab:gmm_ct_ablation}")
+    latex_lines.append(r"\vspace{2mm}")
+    latex_lines.append(r"\resizebox{\linewidth}{!}{%")
+    
+    n_cols = len(df.columns) + 1
+    col_spec = "c" * n_cols
+    latex_lines.append(f"\\begin{{tabular}}{{{col_spec}}}")
+    latex_lines.append(r"\toprule")
+    
+    # Header row
+    headers = [r"\textbf{$N$ Gaussians}"]
+    for col in df.columns:
+        headers.append(COLUMN_MAPPINGS.get(col, r"\makecell{" + str(col) + "}"))
+    
+    latex_lines.append(" & ".join(headers) + r" \\")
+    latex_lines.append(r"\midrule")
+    
+    # Data rows
+    for idx, row in df.iterrows():
+        row_str = [f"$N = {idx}$"]
+        for col in df.columns:
+            formatted_val = format_latex_cell(row[col])
+            row_str.append(formatted_val)
+        latex_lines.append(" & ".join(row_str) + r" \\")
+        
+    latex_lines.append(r"\bottomrule")
+    latex_lines.append(r"\end{tabular}")
+    latex_lines.append(r"}")
+    latex_lines.append(r"\end{table*}")
+    
+    latex_code = "\n".join(latex_lines)
+    LATEX_OUTPUT_PATH.write_text(latex_code)
+    
+    print("\n" + "=" * 60)
+    print("      GENERATED PUBLICATION-READY LATEX TABLE CODE          ")
+    print("=" * 60 + "\n")
+    print(latex_code)
+    print("\n" + "=" * 60)
+    print(f"LaTeX snippet saved to: {LATEX_OUTPUT_PATH}")
+
+
 if __name__ == "__main__":
     collate_results()
+    convert_csv_to_latex()

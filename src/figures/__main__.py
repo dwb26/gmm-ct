@@ -1,4 +1,4 @@
-"""``python -m src.figures EXP_DIR [--only NAME ...] [--times T1 T2] [--out DIR] [--fmt pdf]``"""
+"""``python -m src.figures EXP_DIR [--only NAME ...] [--times T ...] [--out DIR] [--fmt pdf]``"""
 
 import argparse
 import logging
@@ -10,7 +10,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="Render manuscript figures for one experiment directory.")
     p.add_argument("exp_dir")
     p.add_argument("--only", nargs="+", choices=sorted(FIGURES))
-    p.add_argument("--times", nargs=2, type=float, metavar=("T1", "T2"))
+    p.add_argument("--times", nargs="+", type=float, metavar="T")
     p.add_argument("--out")
     p.add_argument("--fmt", default="pdf")
     args = p.parse_args(argv)

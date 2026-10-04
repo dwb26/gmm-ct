@@ -74,6 +74,26 @@ class Run:
         R = np.array([[np.cos(ang), -np.sin(ang)], [np.sin(ang), np.cos(ang)]])
         return R @ np.linalg.inv(U.T @ U) @ R.T
 
+    def project(self, theta: dict) -> np.ndarray:
+        """Noise-free projections [T, R] of ``theta`` (numpy port of ``GMM_reco.generate_projections``)."""
+        EPS = 1e-10
+        r_minus_s = np.stack([np.full_like(self.y, self.detector_x), self.y], axis=1) - self.source
+        r_hat = r_minus_s / np.linalg.norm(r_minus_s, axis=1, keepdims=True)
+        centers = self.centers(theta, self.t)
+        out = np.zeros((len(self.t), len(self.y)))
+        for n in range(self.N):
+            ang = 2 * np.pi * theta["omegas"][n] * self.t
+            c, s = np.cos(ang), np.sin(ang)
+            R = np.stack([np.stack([c, -s], -1), np.stack([s, c], -1)], -2)           # [T, 2, 2]
+            U_t = theta["U_skews"][n] @ R.transpose(0, 2, 1)                          # [T, 2, 2]
+            U_rhat = np.einsum("rd,ted->tre", r_hat, U_t)
+            U_r = np.einsum("rd,ted->tre", r_minus_s, U_t)
+            U_traj = np.einsum("td,ted->te", self.source - centers[n], U_t)[:, None]
+            quotient = np.sqrt(np.pi) * theta["alphas"][n] / (np.linalg.norm(U_rhat, axis=-1) + EPS)
+            exp_arg = (U_r * U_traj).sum(-1) ** 2 / ((U_r ** 2).sum(-1) + EPS) - (U_traj ** 2).sum(-1)
+            out += quotient * np.exp(exp_arg)
+        return out
+
     def mode_heights(self, theta: dict, t=None) -> np.ndarray:
         """Detector height hit by the ray from the source through each centre, shape [N, T]."""
         t = self.t if t is None else t
