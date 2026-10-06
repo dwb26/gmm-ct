@@ -35,7 +35,7 @@ VARIANTS: Dict[str, str] = {
     "GMM-CT": "gmm-ct",
 }
 
-N_PARTICLES: List[int] = [1, 2, 5, 8]
+N_PARTICLES: List[int] = [1, 2, 5, 9, 15]
 SEEDS: List[int] = list(range(10))
 
 PER_SEED_KEYS = ["v0_rmse", "omega_rmse", "alpha_rmse", "U_rmse", "traj_rmse",
