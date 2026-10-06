@@ -2,7 +2,6 @@
 
 import logging
 import math
-import warnings
 from datetime import datetime
 
 import numpy as np
@@ -61,33 +60,73 @@ def construct_receivers(device=None, *args):
 # Ground-truth parameter generation
 # ==========================================================================
 
+VELOCITY_MODELS = ("clustered", "sparse")
+
 def generate_velocity_ensemble(
     N: int,
     mean: tuple[float, float] = (1.0, 1.0),
     std: tuple[float, float] = (0.5, 2.0),
     device: torch.device = torch.device('cpu'),
-    max_attempts: int = 1000,
+    max_attempts: int = 100000,
+    model: str = "sparse",
+    x0: torch.Tensor | None = torch.tensor([1.0, 1.0]),
+    a0: torch.Tensor | None = torch.tensor([0.0, -9.81]),
+    duration: float = 2.0,
+    min_separation: float = 0.2, # Both 0.2 is the safe option
+    # max_overlap_frac: float = 0.25,
+    max_overlap_frac: float = 0.4,
+    n_times: int = 128,
 ) -> list[torch.Tensor]:
     """Generates N independent velocity vectors sampled from a 2D diagonal Normal distribution.
     
     Rejects samples where v_x <= 0 to ensure forward motion along the x-axis.
+
+    ``model`` selects the sampling scheme:
+
+    - ``"clustered"``: independent draws with only the v_x > 0 rule, so particles may
+      overlap or stay close (the original scheme, also used to initialise estimates).
+    - ``"sparse"``: additionally, a candidate is discarded when its vertical (y) trajectory
+      y(t) = x0_y + v_y t + a0_y t^2 / 2 lies within ``min_separation`` of an already
+      accepted particle for more than ``max_overlap_frac`` of the observation window,
+      so that particles remain distinguishable in the receiver array. Requires ``x0``
+      and ``a0``. ``max_attempts`` is then a per-particle budget.
     """
+    if model not in VELOCITY_MODELS:
+        raise ValueError(f"Unknown velocity model '{model}'; expected one of {VELOCITY_MODELS}.")
+    reject = model == "sparse"
+    if reject and (x0 is None or a0 is None):
+        raise ValueError('model="sparse" requires x0 and a0.')
     dtype = torch.float64
     mu = torch.tensor(mean, dtype=dtype, device=device)
     sigma = torch.tensor(std, dtype=dtype, device=device)
     
     v0s = []
     attempts = 0
+    budget = max_attempts * (N if reject else 1)
+
+    if reject:
+        t_grid = torch.linspace(0.0, duration, n_times, dtype=dtype, device=device)
+        y_of = lambda v: x0[1].to(dtype) + v[1] * t_grid + 0.5 * a0[1].to(dtype) * t_grid**2
+        accepted_y = []
     
-    while len(v0s) < N and attempts < max_attempts:
+    while len(v0s) < N and attempts < budget:
         attempts += 1
         # Sample independent (v_x, v_y) from bivariate normal
         v_sample = mu + sigma * torch.randn(2, dtype=dtype, device=device)
         
         # Simple rejection rule: keep only forward x-velocities
-        if v_sample[0] > 0.0:
-            v_sample.requires_grad_(True)
-            v0s.append(v_sample)
+        if not v_sample[0] > 0.0:
+            continue
+
+        if reject:
+            y = y_of(v_sample)
+            if any(((y - y_k).abs() < min_separation).double().mean() > max_overlap_frac
+                   for y_k in accepted_y):
+                continue
+            accepted_y.append(y)
+
+        v_sample.requires_grad_(True)
+        v0s.append(v_sample)
             
     if len(v0s) < N:
         raise RuntimeError(
@@ -100,20 +139,39 @@ def generate_velocity_ensemble(
 def generate_particle_morphology(
     N: int,
     d: int = 2,
-    min_diag_ratio: float = 1.5,
+    max_diag_ratio: float = 2.5,
+    diag_range: tuple[float, float] = (16.0, 58.0),
     device: torch.device = torch.device('cpu'),
 ) -> list[torch.Tensor]:
-    """Generates upper-triangular precision factor matrices U."""
+    """Generates upper-triangular precision factor matrices U.
+
+    Size and shape are sampled separately so that both vary independently:
+    the geometric mean of the diagonal (particle size; larger = smaller particle) is
+    log-uniform over ``diag_range``, and the anisotropy ratio max/min is uniform on
+    [1, ``max_diag_ratio``] (so near-isotropic particles are possible but not dominant).
+    Samples whose diagonal leaves ``diag_range`` are rejected, so no particle is thinner
+    than ``max_diag_ratio`` allows.
+    """
     dtype = torch.float64
+    lo, hi = diag_range
+    log_lo, log_hi = math.log(lo), math.log(hi)
     U_ns = []
-    
+
     for _ in range(N):
         for _ in range(500):
-            # Sample diagonal in range [20.0, 50.0]
-            U_n_diag = torch.rand(size=(d,), dtype=dtype, device=device) * 30.0 + 20.0
+            geo_mean = math.exp(log_lo + (log_hi - log_lo) * torch.rand(1).item())
+            ratio = 1.0 + (2 * max_diag_ratio - 1.0) * torch.rand(1).item()
 
-            # Reject isotropic or near-spherical Gaussians
-            if (U_n_diag.max() / U_n_diag.min()).item() < min_diag_ratio:
+            # Spread the ratio symmetrically in log-space around the geometric mean
+            if d == 2:
+                sign = 1.0 if torch.rand(1).item() < 0.5 else -1.0
+                log_spread = torch.tensor([sign, -sign], dtype=dtype, device=device)
+            else:
+                log_spread = torch.empty(d, dtype=dtype, device=device).uniform_(-1, 1)
+                log_spread = log_spread / log_spread.abs().max()
+            U_n_diag = geo_mean * torch.exp(0.5 * math.log(ratio) * log_spread)
+
+            if U_n_diag.min() < lo or U_n_diag.max() > hi:
                 continue
 
             # Zero-centered off-diagonals to avoid systematic shear bias
@@ -131,10 +189,7 @@ def generate_particle_morphology(
             U_n[triu_indices[0][off_diag_mask], triu_indices[1][off_diag_mask]] = U_n_upper
             break
         else:
-            warnings.warn(
-                f"Could not satisfy min_diag_ratio >= {min_diag_ratio}; accepting last sample.",
-                RuntimeWarning, stacklevel=2
-            )
+            raise RuntimeError(f"Could not sample a morphology within diag_range={diag_range}.")
         U_ns.append(U_n)
         
     return U_ns
@@ -147,13 +202,18 @@ def generate_true_param(
     min_rot: float, 
     max_rot: float,
     device: torch.device = torch.device('cpu'), 
+    velocity_model: str = "sparse",
+    duration: float = 2.0,
+    n_times: int = 128,
 ) -> dict[str, list[torch.tensor]]:
     """Generate a complete set of synthetic GMM parameters for testing.
 
     Parameters
     ----------
-    min_diag_ratio : float, optional
-        Minimum diagonal aspect ratio for U_skew (enforces anisotropy).
+    velocity_model : {"sparse", "clustered"}, optional
+        ``"sparse"`` rejection-samples velocities so vertical trajectories are separated;
+        ``"clustered"`` uses plain independent draws (see ``generate_velocity_ensemble``).
+        Estimates are always initialised with ``"clustered"``.
 
     Returns
     -------
@@ -184,7 +244,10 @@ def generate_true_param(
 
     # ---- Trajectory parameters
     x0s = [initial_location.to(torch.float64) for _ in range(N)]
-    v0s = generate_velocity_ensemble(N)
+    v0s = generate_velocity_ensemble(
+        N, model=velocity_model, x0=x0s[0], a0=initial_acceleration.to(torch.float64),
+        duration=duration, n_times=n_times,
+    )
     a0s = [initial_acceleration.to(torch.float64) for _ in range(N)]
 
     return {"alphas": alphas, "U_skews": U_ns, "omegas": omegas,

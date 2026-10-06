@@ -28,8 +28,8 @@ def temporal(run: Run, times=None) -> plt.Figure:
     cols = slice_colors(len(idxs))
     colors = particle_colors(run.N)
 
-    # est = _reordered(run.theta_est, match_to_truth(run, run.theta_est))
-    est = _reordered(run.theta_init, match_to_truth(run, run.theta_init))
+    # est = _reordered(run.theta_init, match_to_truth(run, run.theta_init))
+    est = _reordered(run.theta_est, match_to_truth(run, run.theta_est))
     proj_est = run.project(est)
 
     centers = run.centers(run.theta_true, run.t)
@@ -39,6 +39,7 @@ def temporal(run: Run, times=None) -> plt.Figure:
     n = len(idxs)
     fig = plt.figure(figsize=(WIDTH, 3.0 * n + 0.4), layout="constrained")
     gs = fig.add_gridspec(n, 3, width_ratios=[1.2, 0.8, 1.2])
+    # titles = ("Simulated", "Projections", "Stage 2 Initialization")
     titles = ("Simulated", "Projections", "Reconstructed")
 
     for r, (idx, col) in enumerate(zip(idxs, cols)):
@@ -75,14 +76,20 @@ def temporal(run: Run, times=None) -> plt.Figure:
         ax_proj.set_xlabel("Intensity" if last else "", fontweight="bold")
         ax_proj.tick_params(labelleft=False)
         ax_proj.grid(True, alpha=0.3, linestyle="--")
+        
+        ax_true.tick_params(labelsize=11)
+        ax_proj.tick_params(labelsize=11)
+        ax_est.tick_params(labelsize=11)
 
         if r == 0:
+            for ax in (ax_true, ax_proj, ax_est):
+                ax.tick_params(labelbottom=False)
             for ax, title in zip((ax_true, ax_proj, ax_est), titles):
                 ax.set_title(title, fontweight="bold")
-            ax_proj.legend(frameon=False, loc="best")
-            ax_true.legend(handles=[Patch(facecolor=c, edgecolor="black", label=f"$\\rho_{{{k+1}}}$")
-                                    for k, c in enumerate(colors)], loc="upper left", frameon=True)
-            ax_est.legend(handles=[Patch(facecolor=c, edgecolor="black", label=f"$\\widehat\\rho_{{{k+1}}}$")
-                                   for k, c in enumerate(colors)], loc="upper right", frameon=True)
+            # ax_proj.legend(frameon=False, loc="best")
+            # ax_true.legend(handles=[Patch(facecolor=c, edgecolor="black", label=f"$\\rho_{{{k+1}}}$")
+                                    # for k, c in enumerate(colors)], loc="upper left", frameon=True)
+            # ax_est.legend(handles=[Patch(facecolor=c, edgecolor="black", label=f"$\\widehat\\rho_{{{k+1}}}$")
+                                #    for k, c in enumerate(colors)], loc="upper right", frameon=True)
 
     return fig

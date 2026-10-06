@@ -34,7 +34,7 @@ def state_sinogram(run: Run, times=None) -> plt.Figure:
         draw_gaussians(ax_s, run, run.theta_true, run.t[idx], gauss_cols)
         draw_geometry(ax_s, run)
         ax_s.set_xlim(xlo, xhi)
-        ax_s.set_ylim(ymin, ymax)
+        ax_s.set_ylim(ymin - 0.2, ymax + 0.2)
         ax_s.set_aspect("equal", adjustable="box")
         ax_s.set_xlabel("Depth", fontweight="bold")
         ax_s.set_ylabel("Detector height" if i == 0 else "", fontweight="bold")
@@ -46,6 +46,7 @@ def state_sinogram(run: Run, times=None) -> plt.Figure:
         ax_p = make_axes_locatable(ax_s).append_axes("right", size="35%", pad=0.08, sharey=ax_s)
         draw_projection_profile(ax_p, run, idx, "black")
         ax_p.lines[0].set_alpha(0.85)
+        ax_p.set_title(f"Projection", fontweight="bold")
         ax_p.set_xlabel("Intensity", fontweight="bold")
         ax_p.tick_params(labelleft=False)
         first_state = first_state or ax_s

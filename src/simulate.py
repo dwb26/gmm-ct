@@ -52,6 +52,9 @@ def run_simulation(cfg: ExperimentConfig) -> Path:
         min_rot=omega_min,
         max_rot=omega_max, 
         device=device,
+        velocity_model=cfg.physics.velocity_model,
+        duration=cfg.physics.duration,
+        n_times=n_proj,
     )
     
     # --- Setup output directory ---

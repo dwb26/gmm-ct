@@ -16,7 +16,6 @@ import torch
 import torch.nn.functional as F
 from torch.nn import MSELoss
 from torchmin import minimize
-import matplotlib.pyplot as plt
 
 from .utils import (
     generate_velocity_ensemble, 
@@ -68,10 +67,10 @@ class GMM_reco:
         self.a0s = a0s
         self.omega_min = omega_min
         self.omega_max = omega_max
-        self.n_traj_trials = 10 * N
+        self.n_traj_trials = 4 * N
         self.v0_init_mean = (1.0, 1.0)
         self.v0_init_std = (0.5, 2.0)
-        self.n_omega_inits = 1 * N
+        self.n_omega_inits = N
         self.save_diagnostics = save_diagnostics
         self.t_observable = []
         self.peak_detection_method = peak_detection_method
@@ -153,39 +152,7 @@ class GMM_reco:
 
         return soln_dict
     
-    def naive_fit(
-        self, 
-        proj_data: list[torch.Tensor],
-        t: torch.Tensor,
-        intermediate_initialization: bool = True,
-    ) -> dict[str, list[torch.Tensor]]:
-        """
-        Execute optimization pipeline based on the following:
-        
-            1. Least Squares trajectory optimization based on the raw projections.
-            2. (Optional) Given trajectories, initialize for rotation and attenuation.
-            3. Optimizing for all morphology and rotation parameters using Huber loss.
-            
-        """
-        logger.info("Stage 1: Naive trajectory optimization")
-        soln_dict = self._stage_lstsq_trajectory_optimization(proj_data=proj_data, t=t)
-        
-        # ---- Stage 1.5: Rotation & Attenuation Initialization
-        if intermediate_initialization:
-            logger.info("Stage 1.5: Intermediate initialization")
-                        
-            # Stage 1.5a: Grid Search for Angular Velocities (ω)
-            soln_dict = self._stage_omega_initialization(soln_dict)
-
-            # Stage 1.5b: NNLS for Amplitudes (α)
-            soln_dict = self._stage_alpha_initialization(soln_dict)
-
-        logger.info("Stage 2: Running Stage 2 Multi-Start")
-        soln_dict = self._stage_multistart_joint(soln_dict)
-        
-        return soln_dict
-    
-    def fit_static_least_squares(
+    def direct_ls(
         self,
         proj_data: list[torch.Tensor],
         t: torch.Tensor,
@@ -212,6 +179,14 @@ class GMM_reco:
             # Initialize the velocities specific to the trial
             self.theta_dict_init["v0s"] = self.initialize_initial_velocities()
             init_values.append(self.theta_dict_init["v0s"])
+
+            # Omega must start inside (omega_min, omega_max): the logit reparameterisation
+            # saturates outside it and would freeze omega at omega_min
+            self.theta_dict_init["omegas"] = [
+                torch.tensor([np.random.uniform(self.omega_min, self.omega_max)],
+                             dtype=torch.float64, device=self.device)
+                for _ in range(self.N)
+            ]
         
             # Flatten parameters into optimization vector
             x0_init = self.map_from_dict_to_tensor(self.theta_dict_init, mode="joint_with_v0")
@@ -245,7 +220,38 @@ class GMM_reco:
         soln_dict = self.construct_soln_dict(best_res, mode='joint_with_v0')
         
         return soln_dict
+    
+    def decoupled_ls(
+        self, 
+        proj_data: list[torch.Tensor],
+        t: torch.Tensor,
+        intermediate_initialization: bool = True,
+    ) -> dict[str, list[torch.Tensor]]:
+        """
+        Execute optimization pipeline based on the following:
         
+            1. Least Squares trajectory optimization based on the raw projections.
+            2. (Optional) Given trajectories, initialize for rotation and attenuation.
+            3. Optimizing for all morphology and rotation parameters using Huber loss.
+            
+        """
+        logger.info("Stage 1: Naive trajectory optimization")
+        soln_dict = self._stage_lstsq_trajectory_optimization(proj_data=proj_data, t=t)
+        
+        # ---- Stage 1.5: Rotation & Attenuation Initialization
+        if intermediate_initialization:
+            logger.info("Stage 1.5: Intermediate initialization")
+                        
+            # Stage 1.5a: Grid Search for Angular Velocities (ω)
+            soln_dict = self._stage_omega_initialization(soln_dict)
+
+            # Stage 1.5b: NNLS for Amplitudes (α)
+            soln_dict = self._stage_alpha_initialization(soln_dict)
+
+        logger.info("Stage 2: Running Stage 2 Multi-Start")
+        soln_dict = self._stage_multistart_joint(soln_dict)
+        
+        return soln_dict        
 
     # ==================================================================
     # Stage 1 – trajectory optimization
@@ -298,6 +304,7 @@ class GMM_reco:
 
         soln_dict["v0s"] = [v0_n.clone().detach() for v0_n in soln_dict["v0s"]]
         soln_dict = self.refine_initial_velocities_via_newton_raphson(soln_dict, best_res)
+        # self.theta_pre_stage_2["v0s"] = soln_dict["v0s"]
         
         soln_dict["alphas"] = [alpha.clone().detach() for alpha in self.theta_dict_init["alphas"]]
         soln_dict["omegas"] = [omega.clone().detach() for omega in self.theta_dict_init["omegas"]]
@@ -321,11 +328,10 @@ class GMM_reco:
 
     def initialize_initial_velocities(self) -> list[torch.Tensor]:
         return generate_velocity_ensemble(
-            N=self.N, mean=self.v0_init_mean, std=self.v0_init_std, device=self.device
+            N=self.N, mean=self.v0_init_mean, std=self.v0_init_std, device=self.device, model="clustered",
         )
         
     def initialize_isotropic_U_skews(self):
-        # U_skews = [torch.diag(torch.tensor([35.0, 35.0], dtype=torch.float64, device=self.device)) for _ in range(self.N)]
         return [torch.tensor([[45.0, 0], [0, 45.0]], dtype=torch.float64, device=self.device) for _ in range(self.N)]
     
     # ==================================================================
@@ -685,15 +691,26 @@ class GMM_reco:
             t_obs = torch.tensor(times, dtype=torch.float64, device=self.device)
             receivers_n = [torch.tensor([r0_x, h], dtype=torch.float64, device=self.device) for h in heights]
             
-            v0_n_refined = NewtonRaphsonLBFGS(
-                self.isotropic_derivative_function_over_all_times,
-                soln_dict['v0s'][gaussian_idx],
-                t_obs, receivers_n, self.sources[0],
-                soln_dict['x0s'][gaussian_idx],
-                soln_dict['a0s'][gaussian_idx],
-                tol=OPT_TOL,
-                max_iter=OPT_MAX_ITER,
-            )
+            v0_start = soln_dict['v0s'][gaussian_idx].detach().clone()
+            args = (t_obs, receivers_n, self.sources[0],
+                    soln_dict['x0s'][gaussian_idx], soln_dict['a0s'][gaussian_idx])
+
+            # Refine in (log v_x, v_y) so that v_x > 0 is preserved, as in the other stages
+            def loss_in_z(z, *a):
+                v0 = torch.stack([torch.exp(z[0]), z[1]])
+                return self.isotropic_derivative_function_over_all_times(v0, *a)
+
+            z0 = torch.stack([torch.log(v0_start[0].clamp_min(1e-8)), v0_start[1]]).detach()
+            loss_start = loss_in_z(z0, *args).item()
+            z_ref = NewtonRaphsonLBFGS(
+                loss_in_z, z0.clone(), *args, tol=OPT_TOL, max_iter=OPT_MAX_ITER,
+            ).detach()
+            v0_n_refined = torch.stack([torch.exp(z_ref[0]), z_ref[1]])
+
+            # Keep the unrefined estimate if refinement failed or made things worse
+            loss_end = loss_in_z(z_ref, *args).item()
+            if not (np.isfinite(loss_end) and loss_end <= loss_start):
+                v0_n_refined = v0_start
             v0s_refined.append(v0_n_refined.requires_grad_(True))
 
         return v0s_refined

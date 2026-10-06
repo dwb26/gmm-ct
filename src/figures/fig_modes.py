@@ -31,7 +31,8 @@ def modes(run: Run, times=None, crop_time: bool = True) -> plt.Figure:
     gs = fig.add_gridspec(2, 3, width_ratios=[1, 1.8, 1.8])
 
     ax_mid = fig.add_subplot(gs[:, 1])
-    ax_right = fig.add_subplot(gs[:, 2], sharex=ax_mid, sharey=ax_mid)
+    ax_right_u = fig.add_subplot(gs[0, 2], sharey=ax_mid)
+    ax_right_l = fig.add_subplot(gs[1, 2], sharex=ax_right_u, sharey=ax_mid)
     y_max = 0.0
     symbols = ["^", "d"]
     for row, (idx, col) in enumerate(zip(idxs, cols)):
@@ -46,16 +47,16 @@ def modes(run: Run, times=None, crop_time: bool = True) -> plt.Figure:
         else:
             ax.set_xlabel("Detector height", fontweight="bold")
         ax.set_ylabel("Projection intensity", fontweight="bold")
-        for target in (ax_mid, ax_right):
+        for target in [ax_mid]:
             target.plot([run.t[idx]] * len(modes_per_time[idx]), modes_per_time[idx], symbols[row],
                         color="black", markersize=7, linestyle="none", zorder=4, markerfacecolor="None", 
-                        markeredgecolor="black")
+                        markeredgecolor="red")
     for row, (idx, col) in enumerate(zip(idxs, cols)):
         ax = fig.axes[row]
         ax.set(ylim=(-.5, y_max))
         ax.tick_params(labelsize=12)
 
-    for ax in (ax_mid, ax_right):
+    for ax in (ax_mid, ax_right_u, ax_right_l):
         draw_mode_data(ax, run, modes_per_time)
         ax.set_xlabel("Time", fontweight="bold")
         ax.tick_params(labelleft=False)
@@ -68,16 +69,20 @@ def modes(run: Run, times=None, crop_time: bool = True) -> plt.Figure:
         ax_mid.set_xlim(run.t[0], run.t[-1])
 
     if run.theta_init is not None:
-        draw_mode_trajectories(ax_mid, run, run.theta_init, pcols, alpha=0.6)
+        draw_mode_trajectories(ax_right_u, run, run.theta_init, pcols, alpha=0.6)
     else:
         logger.warning("No theta_pre_stage1_5 in %s; skipping initial trajectories.", run.exp_dir)
-    ax_mid.set_title("Observed Modes + Initial Trajectories", fontweight="bold")
+    ax_mid.set_title("Observed Modes", fontweight="bold")
+    ax_right_u.set_title("Observed Modes + Initial Trajectories", fontweight='bold')
     ax_mid.set_ylabel("Detector Height", fontweight="bold")
     ax_mid.tick_params(labelleft=True, labelsize=12)
-    ax_right.tick_params(labelsize=12)
+    ax_right_u.tick_params(labelsize=12)
+    ax_right_l.tick_params(labelsize=12)
+    ax_right_u.tick_params(labelbottom=False)
+    ax_right_u.set_xlabel('')
 
     if run.theta_est is not None:
-        draw_mode_trajectories(ax_right, run, run.theta_est, pcols,
+        draw_mode_trajectories(ax_right_l, run, run.theta_est, pcols,
                                labels=[rf"$r^*_{k + 1}(t)$" for k in range(run.N)], alpha=0.6)
-    ax_right.set_title("Observed Modes + Fitted Trajectories", fontweight="bold")
+    ax_right_l.set_title("Observed Modes + Fitted Trajectories", fontweight="bold")
     return fig

@@ -81,18 +81,18 @@ def run_reconstruction(cfg: ExperimentConfig) -> GMM_reco:
         model.x0s = [x0 + shift for x0 in model.x0s]
     
     # --- Run reconstruction ---
-    pipeline_mode = getattr(cfg.reconstruction, "pipeline_mode", "full")
+    pipeline_mode = getattr(cfg.reconstruction, "pipeline_mode", "gmm-ct")
     if pipeline_mode == "gmm-ct":
         logger.info("Executing GMM-CT: Trajectory Recovery (Hausdorff/Peaks) -> Multi-Start Least Squares")
         soln_dict = model.fit(proj_data=proj_data, t=t)
         
     elif pipeline_mode == "direct-ls":
         logger.info("Executing Direct Frame-by-Frame Least Squares Baseline with no Staging/Pipelining")
-        soln_dict = model.fit_static_least_squares(proj_data=proj_data, t=t)
+        soln_dict = model.direct_ls(proj_data=proj_data, t=t)
         
     elif pipeline_mode == "decoupled-ls":
         logger.info("Executing: Least-Squares, but with Decoupling")
-        soln_dict = model.naive_fit(proj_data=proj_data, t=t, intermediate_initialization=False)
+        soln_dict = model.decoupled_ls(proj_data=proj_data, t=t, intermediate_initialization=False)
 
     # --- Export Human-Readable Parameter Estimates ---
     export_parameters(

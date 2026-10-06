@@ -66,6 +66,7 @@ class PhysicsConfig:
     n_projections: int = 150
     duration: float = 1.5
     initial_velocities: List[float] = field(default_factory=lambda: [0.75, 0.5])
+    velocity_model: str = "sparse"  # "sparse" (separated trajectories) or "clustered" (plain draws)
     
     def to_tensors(self, n_gaussians: int, device: torch.device):
         """Return (x0s, a0s) as per-Gaussian tensor lists on device."""
@@ -179,7 +180,8 @@ def load_experiment_config(path: Union[str, Path]) -> ExperimentConfig:
             omega_range=tuple(omega),
             n_projections=physics_raw.get("n_projections", 150),
             duration=physics_raw.get("duration", 1.5),
-            initial_velocities=physics_raw.get("initial_velocities", [0.75, 0.5])
+            initial_velocities=physics_raw.get("initial_velocities", [0.75, 0.5]),
+            velocity_model=physics_raw.get("velocity_model", "sparse"),
         ),
         reconstruction=ReconstructionConfig(**raw.get("reconstruction", {})),
         analysis=AnalysisConfig(**raw.get("analysis", {})),

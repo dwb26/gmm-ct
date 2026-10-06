@@ -16,8 +16,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Target Directory & Variant Mapping ---
-SNR_DB = 20  # must match the experiment folder prefix, e.g. snr20_N5_...
-BASE_DIR = Path(f"data/snr{SNR_DB}.0_ablation_and_baseline")
+# SNR_DB = 20  # must match the experiment folder prefix, e.g. snr20_N5_...
+hyp_param = '02_04'
+BASE_DIR = Path(f"data/ablation_and_baseline_{hyp_param}")
 CSV_PATH = BASE_DIR / "ablation_summary.csv"
 LATEX_OUTPUT_PATH = BASE_DIR / "ablation_table.tex"
 
@@ -37,34 +38,119 @@ VARIANTS: Dict[str, str] = {
 N_PARTICLES: List[int] = [1, 2, 5, 8]
 SEEDS: List[int] = list(range(10))
 
+PER_SEED_KEYS = ["v0_rmse", "omega_rmse", "alpha_rmse", "U_rmse", "traj_rmse",
+                 "v0_median_err", "traj_median_err"]
+DENSITY_SUCCESS = 0.1   # relative L2 below this counts as recovered
+TRAJ_SUCCESS = 0.01     # trajectory RMSE below this counts as recovered
+FAIL_THRESHOLD = 0.99  # relative L2 saturates near 1 when an estimate is missing / off-mesh
+
+
+def write_success_outputs(detail: pd.DataFrame, per_seed: pd.DataFrame) -> None:
+    """Success-rate table (CSV + LaTeX) and per-seed strip plot."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    labels = list(VARIANTS)
+    rows = []
+    for N, g in detail.groupby("N Particles"):
+        r = {"N Particles": N}
+        for lab in labels:
+            x = g[g["Variant"] == lab]
+            if len(x):
+                x = x.iloc[0]
+                r[lab] = f"{x.n_density_ok}/{x.n_runs} ({x.n_traj_ok}/{x.n_runs})"
+        rows.append(r)
+    tab = pd.DataFrame(rows).set_index("N Particles")
+    tab.to_csv(CSV_PATH.with_name("ablation_success.csv"))
+    logger.info("\nSuccess rate: density rel-L2 < %g (trajectory RMSE < %g)\n%s",
+                DENSITY_SUCCESS, TRAJ_SUCCESS, tab.to_markdown())
+
+    lines = [r"\begin{tabular}{c" + "c" * len(labels) + "}", r"\toprule",
+             " & ".join([r"$N$"] + labels) + r" \\", r"\midrule"]
+    for N, r in tab.iterrows():
+        lines.append(" & ".join([f"${N}$"] + [str(r.get(l, "--")) for l in labels]) + r" \\")
+    lines += [r"\bottomrule", r"\end{tabular}"]
+    CSV_PATH.with_name("ablation_success.tex").write_text("\n".join(lines))
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharex=True)
+    rng = np.random.default_rng(0)
+    colors = dict(zip(labels, ["tab:red", "tab:orange", "tab:blue"]))
+    for ax, key, thr, ylab in [(axes[0], "rel_l2", DENSITY_SUCCESS, "Relative $L_2$ density error"),
+                               (axes[1], "traj_rmse", TRAJ_SUCCESS, "Trajectory RMSE")]:
+        for i, N in enumerate(N_PARTICLES):
+            for j, lab in enumerate(labels):
+                v = per_seed[(per_seed.N == N) & (per_seed.variant == lab)][key].to_numpy(float)
+                v = np.clip(np.nan_to_num(v, nan=1e6), 1e-5, 1e6)
+                ax.scatter(i + (j - 1) * 0.25 + rng.uniform(-0.05, 0.05, len(v)), v,
+                           s=18, color=colors[lab], alpha=0.7, label=lab if i == 0 else None)
+        ax.axhline(thr, color="k", ls="--", lw=0.8)
+        ax.set_yscale("log"); ax.set_ylabel(ylab)
+        ax.set_xticks(range(len(N_PARTICLES))); ax.set_xticklabels(N_PARTICLES)
+        ax.set_xlabel("$N$ Gaussians")
+    axes[0].legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(CSV_PATH.with_name("ablation_per_seed.png"), dpi=200)
+    plt.close(fig)
+
+
 def collate_results():
     summary_rows = []
+    detail_rows = []
+    per_seed = []
 
     for N in N_PARTICLES:
         row = {"N Particles": N}
 
         for label, dir_name in VARIANTS.items():
             variant_dir = BASE_DIR / dir_name
-            errors = []
+            errors, traj_errs, n_failed, n_total = [], [], 0, 0
 
             for seed in SEEDS:
-                exp_dir = variant_dir / f"snr{SNR_DB}_N{N}_nproj128_seed{seed}"
+                exp_dir = variant_dir / f"N{N}_nproj128_seed{seed}"
                 if not exp_dir.exists():
                     continue
+                n_total += 1
+                res = {}
                 try:
-                    errors.append(run_analysis(exp_dir=exp_dir)["rel_l2_density_error"])
+                    res = run_analysis(exp_dir=exp_dir)
+                    err, traj = res["rel_l2_density_error"], res["traj_rmse"]
                 except Exception:
                     logger.exception("Analysis failed for %s", exp_dir)
+                    err, traj = np.nan, np.nan
+                # Non-finite or saturated errors are failures, kept in the statistics at 1.0
+                if not np.isfinite(err) or err >= FAIL_THRESHOLD:
+                    n_failed += 1
+                    err = 1.0 if not np.isfinite(err) else err
+                errors.append(err)
+                traj_errs.append(traj)
+                per_seed.append({"N": N, "variant": label, "seed": seed, "rel_l2": err,
+                                 **{k: res.get(k, np.nan) for k in PER_SEED_KEYS}})
 
             if not errors:
                 row[label] = "Missing (no run folders)"
                 continue
 
             std = np.std(errors, ddof=1) if len(errors) > 1 else 0.0
-            row[label] = f"{np.median(errors):.4f} ± {std:.4f}"
+            cell = f"{np.median(errors):.4f} ± {std:.4f}"
+            if n_failed:
+                cell += f" ({n_failed}/{n_total} diverged)"
+            row[label] = cell
+
+            traj_arr = np.array(traj_errs, dtype=float)
+            detail_rows.append({
+                "N Particles": N, "Variant": label, "n_runs": n_total, "n_failed": n_failed,
+                "mean_rel_l2": float(np.mean(errors)), "median_rel_l2": float(np.median(errors)),
+                "max_rel_l2": float(np.max(errors)),
+                "n_density_ok": int((np.array(errors) < DENSITY_SUCCESS).sum()),
+                "n_traj_ok": int((np.nan_to_num(traj_arr, nan=np.inf) < TRAJ_SUCCESS).sum()),
+                "median_traj_rmse": float(np.nanmedian(traj_arr)) if np.isfinite(traj_arr).any() else np.nan,
+                "max_traj_rmse": float(np.nanmax(traj_arr)) if np.isfinite(traj_arr).any() else np.nan,
+            })
 
         summary_rows.append(row)
 
+    pd.DataFrame(per_seed).to_csv(CSV_PATH.with_name("ablation_per_seed.csv"), index=False)
     df = pd.DataFrame(summary_rows).set_index("N Particles")
     logger.info("\n" + "=" * 80)
     logger.info("                     GMM-CT ABLATION & BASELINE SUMMARY                     ")
@@ -73,7 +159,14 @@ def collate_results():
     logger.info("=" * 80 + "\n")
 
     df.to_csv(CSV_PATH)
-    logger.info(f"Summary (median ± std) saved to: {CSV_PATH}")
+    logger.info(f"Summary (median ± std, failures flagged) saved to: {CSV_PATH}")
+
+    detail = pd.DataFrame(detail_rows)
+    detail_path = CSV_PATH.with_name("ablation_detail.csv")
+    detail.to_csv(detail_path, index=False)
+    logger.info("\n" + detail.to_markdown(index=False, floatfmt=".4g"))
+    write_success_outputs(detail, pd.DataFrame(per_seed))
+    logger.info(f"Detail (mean/max error, trajectory RMSE, failure counts) saved to: {detail_path}")
 
 # ========================================================================
 # LaTeX Section

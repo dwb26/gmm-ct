@@ -74,6 +74,8 @@ def _add_common_args(parser: argparse.ArgumentParser):
         type=int, 
         help="Override N reconstruction particles"
     )
+    parser.add_argument("--velocity-model", type=str, default=None, choices=["sparse", "clustered"],
+                        help="Simulation: velocity sampling scheme for the ground-truth particles")
     parser.add_argument("--init-v-mean", type=float, nargs=2, default=None,
                         help="Sensitivity: mean of the velocity initialisation prior (vx vy)")
     parser.add_argument("--init-v-std", type=float, nargs=2, default=None,
@@ -226,6 +228,8 @@ def _apply_cli_overrides(cfg, args) -> None:
         cfg.sim_n_gaussians = args.sim_n_gaussians
     if args.reco_n_gaussians is not None:
         cfg.reco_n_gaussians  = args.reco_n_gaussians
+    if getattr(args, "velocity_model", None):
+        cfg.physics.velocity_model = args.velocity_model
     if getattr(args, "pipeline_mode", None):
         cfg.reconstruction.pipeline_mode = args.pipeline_mode
     for name in ("init_v_mean", "init_v_std", "x0_offset"):
