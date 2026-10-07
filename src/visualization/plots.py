@@ -20,7 +20,10 @@ REF_N_PROJ = 128    # projection count held fixed in the noise-sensitivity panel
 # Apply publication-quality aesthetic defaults
 plt.style.use("seaborn-v0_8-paper" if "seaborn-v0_8-paper" in plt.style.available else "default")
 plt.rcParams.update({
-    "font.family": "serif",
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+    "mathtext.fontset": "dejavusans",
+    "pdf.fonttype": 42,
     "font.size": 10,
     "axes.labelsize": 11,
     "axes.titlesize": 12,
@@ -29,7 +32,6 @@ plt.rcParams.update({
     "legend.fontsize": 9,
     "figure.titlesize": 13,
 })
-
 
 def generate_benchmark_plots(parquet_path: Path, output_dir: Path) -> None:
     """Reads benchmark Parquet data and exports publication-ready figures."""
@@ -95,8 +97,8 @@ def generate_benchmark_plots(parquet_path: Path, output_dir: Path) -> None:
         errorbar=None,
         ax=axs[1],
     )
-    fs = 14
-    ls = 14
+    fs = 12
+    ls = 13
     axs[0].set_xscale("log", base=2)
     axs[0].set_yscale("log")
     axs[0].set_xlabel(r"Number of Projections ($N_t$)", fontweight="bold", fontsize=fs)
@@ -115,7 +117,7 @@ def generate_benchmark_plots(parquet_path: Path, output_dir: Path) -> None:
         ax.set_ylim(top=1.5)
         ax.annotate(r"$>50\%$ diverged", xy=(0.4, 1.0), xycoords=ax.get_yaxis_transform(),
                     xytext=(0, 3), textcoords="offset points", ha="left", va="bottom",
-                    fontsize=8, color="0.35")
+                    fontsize=9, color="0.35")
     axs[1].legend(title="N", bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=fs-1, title_fontsize=fs-1)
     axs[1].set_title(rf"Noise Sensitivity ($N_t={REF_N_PROJ}$)", fontweight="bold", fontsize=fs+1)
     axs[1].tick_params(labelsize=ls)
@@ -149,7 +151,6 @@ def generate_benchmark_plots(parquet_path: Path, output_dir: Path) -> None:
             x="N",
             y=col_name,
             hue="n_proj",
-            # palette="viridis",
             ax=ax,
             showfliers=False,  # Robust against extreme unobserved outliers
         )
