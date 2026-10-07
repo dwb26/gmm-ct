@@ -73,8 +73,8 @@ def generate_velocity_ensemble(
     a0: torch.Tensor | None = torch.tensor([0.0, -9.81]),
     duration: float = 2.0,
     min_separation: float = 0.2, # Both 0.2 is the safe option
-    # max_overlap_frac: float = 0.25,
-    max_overlap_frac: float = 0.4,
+    max_overlap_frac: float = 0.2,
+    # max_overlap_frac: float = 0.4,
     n_times: int = 128,
 ) -> list[torch.Tensor]:
     """Generates N independent velocity vectors sampled from a 2D diagonal Normal distribution.

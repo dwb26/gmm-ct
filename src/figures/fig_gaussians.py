@@ -131,7 +131,7 @@ def gaussians(run: Run, resolution: int = 256) -> plt.Figure:
                 ax.contour(ax_, ax_, img, levels=3, colors="white", linewidths=0.6, alpha=0.4)
             if r == 0:
                 ax.set_title(columns[c], fontweight="bold")
-        axes[r, 0].set_ylabel(f"{QUANTILE_NAMES[q]}\n$\\rho_{{{k + 1}}}$\n\nHeight", fontweight="bold")
+        axes[r, 0].set_ylabel(f"{QUANTILE_NAMES[q]}\n\nHeight", fontweight="bold")
     for ax in axes[-1]:
         ax.set_xlabel("Depth", fontweight="bold")
 

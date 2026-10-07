@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 import subprocess
 from pathlib import Path
@@ -14,11 +13,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Experimental Grid Setup ---
-N_PARTICLES: List[int] = [1, 2, 5, 9, 15]
+N_PARTICLES: List[int] = [1, 2, 5, 9]
 SEEDS: List[int] = list(range(10))
 
 # Map pipeline CLI arguments to their isolated target subdirectories
-hyp_param = '02_04'
+hyp_param = '02_02'
 PIPELINE_MODES: Dict[str, str] = {
     "gmm-ct": f"data/ablation_and_baseline_{hyp_param}/gmm-ct",
     "direct-ls": f"data/ablation_and_baseline_{hyp_param}/direct-ls",

@@ -8,21 +8,18 @@ import numpy as np
 from src.config import ExperimentConfig, load_experiment_config
 from src.simulate import run_simulation
 from src.reconstruct import run_reconstruction
-from src.analysis import run_analysis
+from src.analysis import cap_density_error, run_analysis
 from src.visualization.plots import generate_benchmark_plots
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Define Experiment Matrix ---
-# SNR_LEVELS = [10.0, 15.0, 20.0, 40.0, 80.0]
-# N_GAUSSIANS = [1, 2, 3, 5, 8, 12, 20]
-# N_PROJECTIONS = [8, 16, 32, 64, 128, 256]
-# SEEDS = range(1, 26)
 SNR_LEVELS = [10.0, 15.0, 20.0, 40.0]
-N_GAUSSIANS = [1, 2, 3, 5, 8, 10, 15]
+N_GAUSSIANS = [1, 2, 3, 5, 9, 15]
 N_PROJECTIONS = [8, 16, 32, 64, 128]
-SEEDS = range(1, 21)
+# SEEDS = range(1, 21)
+SEEDS = range(1, 11)
 
 def generate_configs(base_config_path: Path) -> list[ExperimentConfig]:
     """Generates a list of ExperimentConfig objects by sweeping over parameters."""
@@ -119,6 +116,8 @@ def run_experiment_pipeline(
                 run_reconstruction(cfg)
                 metrics_dict = run_analysis(exp_dir)
                 metrics_dict['status'] = 'success'
+                metrics_dict['rel_l2_density_error'], metrics_dict['diverged'] = cap_density_error(
+                    metrics_dict['rel_l2_density_error'])
 
                 if not keep_tensors:
                     shutil.rmtree(exp_dir, ignore_errors=True)
@@ -137,7 +136,9 @@ def run_experiment_pipeline(
                     'alpha_rmse': np.nan,
                     'U_rmse': np.nan,
                     'l2_density_error': np.nan,
-                    'rel_l2_density_error': np.nan,
+                    'rel_l2_density_error': 1.0,  # failed runs count as diverged, at the cap
+                    'rel_l2_density_error_sq': 1.0,
+                    'diverged': True,
                     'log_l2_density_error': np.nan,
                     'log_rel_l2_density_error': np.nan,
                 }
@@ -166,22 +167,22 @@ def main():
     figures_dir = Path("data/figures")
     
     # 1. Generate full parameter sweep matrix
-    all_configs = generate_configs(base_config_path)
+    # all_configs = generate_configs(base_config_path)
     
-    # 2. Filter out already completed runs for automatic resumption
-    configs_to_run = filter_completed_configs(all_configs, results_path)
+    # # 2. Filter out already completed runs for automatic resumption
+    # configs_to_run = filter_completed_configs(all_configs, results_path)
     
-    if not configs_to_run:
-        logger.info("All experiments in the sweep are completed!")
-        return
+    # if not configs_to_run:
+    #     logger.info("All experiments in the sweep are completed!")
+    #     return
 
-    # 3. Stream pipeline
-    run_experiment_pipeline(
-        configs=configs_to_run,
-        results_path=results_path,
-        keep_tensors=False,
-        batch_size=50,
-    )
+    # # 3. Stream pipeline
+    # run_experiment_pipeline(
+    #     configs=configs_to_run,
+    #     results_path=results_path,
+    #     keep_tensors=False,
+    #     batch_size=50,
+    # )
     
     # 4. Read Parquet results & generate plots
     generate_benchmark_plots(

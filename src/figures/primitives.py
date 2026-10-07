@@ -37,8 +37,8 @@ def draw_geometry(ax, run: Run):
 
 def draw_projection_profile(ax, run: Run, idx: int, color, modes=None, marker="*"):
     """Projection at time index ``idx`` (detector height on x) with its modes marked by ``marker``."""
-    ax.plot(run.y, run.proj[idx], color="black", linewidth=1.0)
-    # ax.plot(run.proj[idx], run.y, color="black", linewidth=1.0)
+    # ax.plot(run.y, run.proj[idx], color="black", linewidth=1.0)
+    ax.plot(run.proj[idx], run.y, color="black", linewidth=1.0)
     if modes is not None and len(modes):
         ax.plot(modes, 0.01 * np.ones(len(modes)), marker, markersize=6, linestyle="none",
                 zorder=4, markerfacecolor="None", markeredgecolor="red", label="Modes")

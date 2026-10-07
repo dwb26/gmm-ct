@@ -5,7 +5,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, List
 
-from src.analysis import run_analysis
+from src.analysis import cap_density_error, run_analysis
 
 logging.basicConfig(
     level=logging.INFO,
@@ -16,8 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Target Directory & Variant Mapping ---
-# SNR_DB = 20  # must match the experiment folder prefix, e.g. snr20_N5_...
-hyp_param = '02_04'
+hyp_param = '02_02'
 BASE_DIR = Path(f"data/ablation_and_baseline_{hyp_param}")
 CSV_PATH = BASE_DIR / "ablation_summary.csv"
 LATEX_OUTPUT_PATH = BASE_DIR / "ablation_table.tex"
@@ -35,14 +34,13 @@ VARIANTS: Dict[str, str] = {
     "GMM-CT": "gmm-ct",
 }
 
-N_PARTICLES: List[int] = [1, 2, 5, 9, 15]
+N_PARTICLES: List[int] = [1, 2, 5, 9]
 SEEDS: List[int] = list(range(10))
 
 PER_SEED_KEYS = ["v0_rmse", "omega_rmse", "alpha_rmse", "U_rmse", "traj_rmse",
                  "v0_median_err", "traj_median_err"]
 DENSITY_SUCCESS = 0.1   # relative L2 below this counts as recovered
 TRAJ_SUCCESS = 0.01     # trajectory RMSE below this counts as recovered
-FAIL_THRESHOLD = 0.99  # relative L2 saturates near 1 when an estimate is missing / off-mesh
 
 
 def write_success_outputs(detail: pd.DataFrame, per_seed: pd.DataFrame) -> None:
@@ -107,7 +105,7 @@ def collate_results():
             errors, traj_errs, n_failed, n_total = [], [], 0, 0
 
             for seed in SEEDS:
-                exp_dir = variant_dir / f"N{N}_nproj128_seed{seed}"
+                exp_dir = variant_dir / f"snr20_N{N}_nproj128_seed{seed}"
                 if not exp_dir.exists():
                     continue
                 n_total += 1
@@ -118,10 +116,9 @@ def collate_results():
                 except Exception:
                     logger.exception("Analysis failed for %s", exp_dir)
                     err, traj = np.nan, np.nan
-                # Non-finite or saturated errors are failures, kept in the statistics at 1.0
-                if not np.isfinite(err) or err >= FAIL_THRESHOLD:
-                    n_failed += 1
-                    err = 1.0 if not np.isfinite(err) else err
+                # Errors are capped at 1 (the empty reconstruction); >= 0.99 counts as diverged
+                err, diverged = cap_density_error(err)
+                n_failed += diverged
                 errors.append(err)
                 traj_errs.append(traj)
                 per_seed.append({"N": N, "variant": label, "seed": seed, "rel_l2": err,
@@ -210,8 +207,9 @@ def convert_csv_to_latex():
     latex_lines.append(r"\begin{table*}[t]")
     latex_lines.append(r"\centering")
     latex_lines.append(r"\caption{Ablation and Baseline Benchmark ($\text{SNR} = 20\,\text{dB}$). "
-                        r"Reported values indicate Median Spatio-Temporal Relative $L_2$ Error $\pm$ Standard Deviation "
-                        r"across 10 random seeds.}")
+                        r"Reported values are the median relative $L_2$ error of the spatio-temporal density $\pm$ standard deviation "
+                        r"across 10 random seeds. Errors are capped at 1 (the error of an empty reconstruction); "
+                        r"runs with error $\geq 0.99$ or a non-finite error are counted as diverged (div.).}")
     latex_lines.append(r"\label{tab:gmm_ct_ablation}")
     latex_lines.append(r"\vspace{2mm}")
     latex_lines.append(r"\resizebox{\linewidth}{!}{%")

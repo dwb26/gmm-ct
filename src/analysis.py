@@ -91,6 +91,19 @@ def compute_integrated_l2_density(
     
     return abs_l2_error, rel_l2_error
 
+DIVERGENCE_THRESHOLD = 0.99  # rel. L2 at or above this: estimate effectively absent from the domain
+
+
+def cap_density_error(err: float) -> tuple[float, bool]:
+    """Cap the relative L2 error at 1 (the error of an empty reconstruction).
+
+    Returns (capped error, diverged). Non-finite errors count as 1 and diverged.
+    """
+    if not np.isfinite(err):
+        return 1.0, True
+    return min(float(err), 1.0), err >= DIVERGENCE_THRESHOLD
+
+
 # compute_run_metrics
 def run_analysis(exp_dir: Path) -> dict:
     """Evaluates parameter and spatio-temporal density metrics for a single experiment directory."""
@@ -163,18 +176,18 @@ def run_analysis(exp_dir: Path) -> dict:
     rel_l2_err = float(np.sqrt(rel_l2_sq))
     
     # --- Animation ---
-    # logger.info("Generating animation...")
-    # animate_temporal_gmm_comparison(
-    #     sources=sources, 
-    #     receivers=receivers, 
-    #     theta_true=theta_true, 
-    #     theta_est=theta_est, 
-    #     t=t, K=N, d=d,
-    #     output_dir=exp_dir,
-    #     proj_data=proj_data,
-    #     filename=exp_dir / "temporal_gmm_comparison.mp4",
-    # )
-    # logger.info("All analysis outputs written to: %s", exp_dir)
+    logger.info("Generating animation...")
+    animate_temporal_gmm_comparison(
+        sources=sources, 
+        receivers=receivers, 
+        theta_true=theta_true, 
+        theta_est=theta_est, 
+        t=t, K=N, d=d,
+        output_dir=exp_dir,
+        proj_data=proj_data,
+        filename=exp_dir / "temporal_gmm_comparison.mp4",
+    )
+    logger.info("All analysis outputs written to: %s", exp_dir)
     
     import matplotlib.pyplot as plt
     plt.close('all')
@@ -202,7 +215,7 @@ def run_analysis(exp_dir: Path) -> dict:
         
         # Joint Spatial/Temporal Errors
         "l2_density_error": l2_err,  # squared, absolute
-        "rel_l2_density_error": rel_l2_err,  # relative L2 norm (sqrt of squared ratio)
+        "rel_l2_density_error": rel_l2_err,  # relative L2 norm (sqrt of squared ratio), uncapped
         "rel_l2_density_error_sq": rel_l2_sq,
         "log_l2_density_error": np.log10(l2_err + 1e-12),
         "log_rel_l2_density_error": np.log10(rel_l2_err + 1e-12),
