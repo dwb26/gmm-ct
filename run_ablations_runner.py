@@ -13,15 +13,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Experimental Grid Setup ---
-N_PARTICLES: List[int] = [1, 2, 5, 9]
+# N_PARTICLES: List[int] = [1, 2, 5, 9]
+N_PARTICLES: List[int] = [9]
 SEEDS: List[int] = list(range(10))
 
 # Map pipeline CLI arguments to their isolated target subdirectories
-hyp_param = '02_02'
+hyp_param = '02_04'
 PIPELINE_MODES: Dict[str, str] = {
-    "gmm-ct": f"data/ablation_and_baseline_{hyp_param}/gmm-ct",
+    # "gmm-ct": f"data/ablation_and_baseline_{hyp_param}/gmm-ct",
     "direct-ls": f"data/ablation_and_baseline_{hyp_param}/direct-ls",
-    "decoupled-ls": f"data/ablation_and_baseline_{hyp_param}/decoupled-ls",
+    # "decoupled-ls": f"data/ablation_and_baseline_{hyp_param}/decoupled-ls",
 }
 
 BASE_CONFIG = "configs/experiment.yaml"

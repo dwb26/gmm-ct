@@ -16,7 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Target Directory & Variant Mapping ---
-hyp_param = '02_02'
+hyp_param = '02_04'
 BASE_DIR = Path(f"data/ablation_and_baseline_{hyp_param}")
 CSV_PATH = BASE_DIR / "ablation_summary.csv"
 LATEX_OUTPUT_PATH = BASE_DIR / "ablation_table.tex"
@@ -41,6 +41,9 @@ PER_SEED_KEYS = ["v0_rmse", "omega_rmse", "alpha_rmse", "U_rmse", "traj_rmse",
                  "v0_median_err", "traj_median_err"]
 DENSITY_SUCCESS = 0.1   # relative L2 below this counts as recovered
 TRAJ_SUCCESS = 0.01     # trajectory RMSE below this counts as recovered
+
+
+LEGEND_NAMES = {"Direct LS": "DH", "Decoupled LS": "LS-H", "GMM-CT": "GMM-CT"}
 
 
 def write_success_outputs(detail: pd.DataFrame, per_seed: pd.DataFrame) -> None:
@@ -74,21 +77,36 @@ def write_success_outputs(detail: pd.DataFrame, per_seed: pd.DataFrame) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharex=True)
     rng = np.random.default_rng(0)
     colors = dict(zip(labels, ["tab:red", "tab:orange", "tab:blue"]))
-    for ax, key, thr, ylab in [(axes[0], "rel_l2", DENSITY_SUCCESS, "Relative $L_2$ density error"),
+    for ax, key, thr, ylab in [(axes[0], "rel_l2", DENSITY_SUCCESS, "Relative $L_2$ error"),
                                (axes[1], "traj_rmse", TRAJ_SUCCESS, "Trajectory RMSE")]:
         for i, N in enumerate(N_PARTICLES):
             for j, lab in enumerate(labels):
                 v = per_seed[(per_seed.N == N) & (per_seed.variant == lab)][key].to_numpy(float)
                 v = np.clip(np.nan_to_num(v, nan=1e6), 1e-5, 1e6)
                 ax.scatter(i + (j - 1) * 0.25 + rng.uniform(-0.05, 0.05, len(v)), v,
-                           s=18, color=colors[lab], alpha=0.7, label=lab if i == 0 else None)
-        ax.axhline(thr, color="k", ls="--", lw=0.8)
-        ax.set_yscale("log"); ax.set_ylabel(ylab)
+                           s=18, color=colors[lab], alpha=0.7,
+                           label=LEGEND_NAMES.get(lab, lab) if i == 0 else None)
+        ax.set_yscale("log"); ax.set_ylabel(ylab, fontsize=15, fontweight="bold")
         ax.set_xticks(range(len(N_PARTICLES))); ax.set_xticklabels(N_PARTICLES)
-        ax.set_xlabel("$N$ Gaussians")
-    axes[0].legend(frameon=False)
+        ax.set_xlabel("$N$", fontsize=15, fontweight="bold")
+        ax.tick_params(axis="both", which="major", labelsize=13, length=6)
+        ax.tick_params(axis="both", which="minor", length=3)
+    # Density error is capped at 1 (empty reconstruction), so y = 1 marks divergence
+    axes[0].axhline(1.0, color="0.45", ls=":", lw=1.0, zorder=1)
+    axes[0].annotate("Diverged", xy=(0.4, 1.0), xycoords=axes[0].get_yaxis_transform(),
+                     xytext=(0, 3), textcoords="offset points", ha="left", va="bottom",
+                     fontsize=9, color="0.35")
+    axes[0].set_ylim(top=2.0)
+    # Major ticks every second decade (half as many)
+    from matplotlib.ticker import LogLocator, NullFormatter
+    axes[1].yaxis.set_major_locator(LogLocator(base=100.0))
+    axes[1].yaxis.set_minor_locator(LogLocator(base=10.0, subs=(1.0,), numticks=20))
+    axes[1].yaxis.set_minor_formatter(NullFormatter())
+    plt.suptitle("Per-Seed Accuracy for Relaxed Trajectory Overlap Sampling", fontweight='bold', fontsize=17)
+    # plt.suptitle("Per-Seed Performance for Restrictive Trajectory Overlap Sampling", fontweight='bold', fontsize=17)
+    axes[0].legend(frameon=True, fontsize=9)
     fig.tight_layout()
-    fig.savefig(CSV_PATH.with_name("ablation_per_seed.png"), dpi=200)
+    fig.savefig(CSV_PATH.with_name(f"ablation_per_seed_{hyp_param}.png"), dpi=200)
     plt.close(fig)
 
 

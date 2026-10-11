@@ -174,7 +174,9 @@ class GMM_reco:
         
         logger.info("Running %d full projection fit trials", self.n_traj_trials)
         errors, results, init_values = [], [], []
-        for _ in range(self.n_traj_trials):
+        n_loc = 8
+        # for _ in range(self.n_traj_trials):
+        for _ in range(n_loc):
             
             # Initialize the velocities specific to the trial
             self.theta_dict_init["v0s"] = self.initialize_initial_velocities()

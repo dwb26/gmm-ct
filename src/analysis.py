@@ -176,18 +176,18 @@ def run_analysis(exp_dir: Path) -> dict:
     rel_l2_err = float(np.sqrt(rel_l2_sq))
     
     # --- Animation ---
-    logger.info("Generating animation...")
-    animate_temporal_gmm_comparison(
-        sources=sources, 
-        receivers=receivers, 
-        theta_true=theta_true, 
-        theta_est=theta_est, 
-        t=t, K=N, d=d,
-        output_dir=exp_dir,
-        proj_data=proj_data,
-        filename=exp_dir / "temporal_gmm_comparison.mp4",
-    )
-    logger.info("All analysis outputs written to: %s", exp_dir)
+    # logger.info("Generating animation...")
+    # animate_temporal_gmm_comparison(
+    #     sources=sources, 
+    #     receivers=receivers, 
+    #     theta_true=theta_true, 
+    #     theta_est=theta_est, 
+    #     t=t, K=N, d=d,
+    #     output_dir=exp_dir,
+    #     proj_data=proj_data,
+    #     filename=exp_dir / "temporal_gmm_comparison.mp4",
+    # )
+    # logger.info("All analysis outputs written to: %s", exp_dir)
     
     import matplotlib.pyplot as plt
     plt.close('all')
